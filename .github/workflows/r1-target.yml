@@ -1,0 +1,57 @@
+name: R1 device binary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/r1-target.yml'
+      - 'sonix-player/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r1-target-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install target build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git pkg-config wget texinfo bison flex \
+            autoconf automake libtool libtool-bin libgmp-dev libmpfr-dev libmpc-dev \
+            xz-utils bzip2 patch python3
+      - name: Cache upstream cross toolchain and static libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            sonix-player/rockbox-toolchain
+            sonix-player/freetype-target
+            sonix-player/audio-target
+            sonix-player/*.tar.*
+          key: r1-toolchain-ubuntu24-${{ hashFiles('sonix-player/rockboxdev/**', 'sonix-player/Makefile') }}
+      - name: Build MIPS player and enforce device glibc compatibility
+        working-directory: sonix-player
+        run: |
+          chmod +x rockboxdev/rockboxdev.sh
+          make target -j2
+          make check-abi
+          rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-readelf -h -l -d sonix_player > target-elf.txt
+          sha256sum sonix_player sonix_launch > target-SHA256SUMS
+      - name: Upload device executables (not a firmware image)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonix-books-r1-device-binary
+          path: |
+            sonix-player/sonix_player
+            sonix-player/sonix_player_debug
+            sonix-player/sonix_launch
+            sonix-player/target-elf.txt
+            sonix-player/target-SHA256SUMS
+          retention-days: 30

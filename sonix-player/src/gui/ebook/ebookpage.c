@@ -1,15 +1,18 @@
 #include "ebookpage.h"
 
-#include <dirent.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/stat.h>
 
-#include "src/system/ebook/ebook.h"
+#include "src/system/ebook/ebooklibrary.h"
 #include "src/system/ebook/ebookhistory.h"
+#include "src/system/ebook/bookmarks.h"
+#include "src/system/core/config.h"
+#include "src/system/core/lang.h"
+#include "src/system/core/utils.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookcovers.h"
 #include "src/gui/ebook/ebookmarkspage.h"
@@ -17,105 +20,163 @@
 #include "src/gui/ebook/ebooksettings.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/shell/keyboard.h"
+#include "src/gui/shell/popover.h"
 #include "src/gui/nowplaying/player.h"
 #include "src/gui/shell/settingsrow.h"
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
-#include "src/system/core/lang.h"
-#include "src/system/core/utils.h"
 
 lv_obj_t *ebookpage_screen;
 
-// ---------------------------------------------------------------------------
-// The shelf
-//
-// Every .epub in the Ebook folder at the root of the card, drawn as its cover.
-//
-// A cover is inside the book, which means opening the book to see it -- the
-// ZIP directory, container.xml and the OPF, for a picture. On a shelf of thirty
-// books that is thirty of those, and doing it while the page is being built
-// would be a second or two of black screen. So the tiles go up at once with the
-// file's name on them, and a worker fills the pictures in behind: the same
-// arrangement the album lists use, for the same reason.
-//
-// The worker opens one book at a time and closes it before the next, so the
-// shelf costs one book's worth of arena however many books are on it.
-// ---------------------------------------------------------------------------
-
-#define SHELF_MAX 300
-#define TILE_COLUMNS 2
 #define TILE_GAP 14
-#define COVER_RATIO_NUM 3 // covers are drawn 2:3, the shape of a paperback
-#define COVER_RATIO_DEN 2
+#define COVER_LOOKAHEAD 400
+#define KEYBOARD_HEIGHT 316
 
+/* Metadata is owned by library; each tile only owns its decoded picture. */
 typedef struct {
-	// Only the file name: the folder is the same for all of them, so keeping a
-	// whole path per book would be three hundred copies of the same prefix.
-	char file[256];
-	char name[256];	 // the file name, until the book says what it is called
-	lv_obj_t *tile;
-	lv_obj_t *glyph; // the placeholder, recoloured at every theme switch
-	lv_obj_t *image;
-	lv_obj_t *label;
+	lv_obj_t *tile, *glyph, *image;
 	cover_image_t cover;
 	bool has_cover;
 } shelf_entry_t;
 
 static gui_config_t *g_cfg;
-static lv_obj_t *grid;
-static lv_obj_t *page_container; // the scroller: what "on screen" is measured against
-static lv_obj_t *empty_note;
-static lv_obj_t *resume_heading;
-static lv_obj_t *resume_row;
-static int resume_index = -1;
-
+static lv_obj_t *grid, *page_container, *empty_note, *resume_row;
+static lv_obj_t *field, *breadcrumb, *up_button, *sort_button;
+static keyboard_t *keyboard;
+static lv_timer_t *scan_timer;
+static ebooklibrary_result_t *library;
 static shelf_entry_t *shelf;
-static int shelf_count;
-static int cover_w, cover_h;
-static char shelf_dir[512];
+static int resume_index = -1;
+static int cover_w, cover_h, content_top;
+static char root[EBOOKLIBRARY_PATH], folder[EBOOKLIBRARY_PATH], query[256];
+static ebooklibrary_sort_t sort_order;
+static const char *const sort_names[] = {"Title A-Z", "Title Z-A", "Author", "Newest", "Oldest"};
 static uint32_t covers_token;
+static bool active;
 
-static void entry_path(const shelf_entry_t *entry, char *out, size_t size) {
-	snprintf(out, size, "%s/%s", shelf_dir, entry->file);
+/* One worker for this page, with a replaceable pending request. Rapid queries
+ * cancel at the next file, rather than creating a new thread for each tap.
+ * LVGL and tile ownership stay exclusively on the UI thread. */
+typedef struct {
+	uint32_t generation;
+	char root[EBOOKLIBRARY_PATH], folder[EBOOKLIBRARY_PATH], query[256], cache[1024], last_key[24];
+	ebooklibrary_sort_t sort;
+	bool continue_book;
+} scan_request_t;
+
+typedef struct {
+	uint32_t generation;
+	ebooklibrary_result_t *books;
+	char continue_path[EBOOKLIBRARY_PATH];
+	bool continue_book;
+} scan_result_t;
+
+static pthread_mutex_t scan_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t scan_wake = PTHREAD_COND_INITIALIZER;
+static _Atomic uint32_t scan_generation, failed_generation;
+static scan_request_t *pending_scan;
+static scan_result_t *completed_scan;
+static bool scan_worker_started;
+
+static void result_free(scan_result_t *r) {
+	if (r) { free(r->books); free(r); }
 }
 
-static void open_book_cb(lv_event_t *e) {
-	if (player_sheet_drag_active() || switcher_back_drag_active()) {
-		return;
-	}
-	int index = (int)(intptr_t)lv_event_get_user_data(e);
-	if (index >= 0 && index < shelf_count) {
-		if (!gui_card_available()) {
-			gui_notify_no_card();
-			return;
-		}
-		char path[800];
-		entry_path(&shelf[index], path, sizeof(path));
-		ebookreader_open(path);
-	}
+static bool scan_cancelled(void *user) {
+	return *(const uint32_t *)user != atomic_load(&scan_generation);
 }
 
-// The covers arrive from ebookcovers.c, which runs them on a detached thread
-// and hands each one over on the UI thread. Keeping that out of here is what
-// lets the bookmarks page have the same behaviour without a second copy of it.
+static bool continue_match(const char *path, void *user) {
+	scan_request_t *request = user;
+	char key[24];
+	bookmark_key(path, key, sizeof(key));
+	return request->last_key[0] && !strcmp(key, request->last_key);
+}
+
+static void *scan_worker(void *unused) {
+	(void)unused;
+	thread_be_background("ebooklibrary");
+	for (;;) {
+		pthread_mutex_lock(&scan_lock);
+		while (!pending_scan) pthread_cond_wait(&scan_wake, &scan_lock);
+		scan_request_t *request = pending_scan;
+		pending_scan = NULL;
+		pthread_mutex_unlock(&scan_lock);
+		scan_result_t *result = calloc(1, sizeof(*result));
+		if (result) {
+			result->generation = request->generation;
+			result->continue_book = request->continue_book;
+			if (request->continue_book && request->last_key[0]) {
+				ebooklibrary_find(request->root, continue_match, request, result->continue_path, sizeof(result->continue_path), scan_cancelled);
+			} else if (!request->continue_book) {
+				/* Cache failures (including a read-only SD card) are harmless. */
+				char parent[1024];
+				snprintf(parent, sizeof(parent), "%s", request->cache);
+				char *slash = strrchr(parent, '/');
+				if (slash) { *slash = 0; mkdir(parent, 0755); mkdir(request->cache, 0755); }
+				result->books = malloc(sizeof(*result->books));
+				if (result->books) ebooklibrary_scan(request->root, request->folder, request->query,
+					request->sort, request->cache, result->books, scan_cancelled, &request->generation);
+			}
+			pthread_mutex_lock(&scan_lock);
+			if (!scan_cancelled(&request->generation)) {
+				result_free(completed_scan);
+				completed_scan = result;
+				result = NULL;
+			}
+			pthread_mutex_unlock(&scan_lock);
+			result_free(result);
+		} else atomic_store(&failed_generation, request->generation);
+		free(request);
+	}
+	return NULL;
+}
+
+static void scan_cancel(void) {
+	atomic_fetch_add(&scan_generation, 1);
+	pthread_mutex_lock(&scan_lock);
+	free(pending_scan);
+	pending_scan = NULL;
+	result_free(completed_scan);
+	completed_scan = NULL;
+	pthread_mutex_unlock(&scan_lock);
+}
+
+static void shelf_free(void) {
+	ebookcovers_stop(covers_token);
+	covers_token = 0;
+	shelf_entry_t *old_shelf = shelf;
+	ebooklibrary_result_t *old_library = library;
+	shelf = NULL; library = NULL;
+	lv_obj_clean(grid); /* disconnect LVGL's references before freeing pixels */
+	if (old_shelf && old_library) for (int i = 0; i < old_library->count; i++) {
+		if (old_shelf[i].has_cover) cover_free(&old_shelf[i].cover);
+	}
+	free(old_shelf);
+	free(old_library);
+	resume_index = -1;
+	lv_obj_set_hidden(resume_row, true);
+}
+
+static bool near_view(int index) {
+	if (!shelf || !library || index < 0 || index >= library->count || !shelf[index].tile) return false;
+	lv_area_t area, visible;
+	lv_obj_get_coords(page_container, &visible);
+	lv_obj_get_coords(shelf[index].tile, &area);
+	return area.y2 >= visible.y1 - COVER_LOOKAHEAD && area.y1 <= visible.y2 + COVER_LOOKAHEAD;
+}
+
 static bool cover_ready(int index, const char *title, const cover_image_t *cover) {
-	if (!shelf || index < 0 || index >= shelf_count) {
+	(void)title; /* The metadata scan already established the title and ordering. */
+	if (!shelf || !library || index < 0 || index >= library->count || !shelf[index].image) return false;
+	if (!near_view(index)) {
+		ebookcovers_forget(covers_token, index);
 		return false;
 	}
+	if (!cover) return false;
 	shelf_entry_t *entry = &shelf[index];
-	if (title && title[0]) {
-		snprintf(entry->name, sizeof(entry->name), "%s", title);
-		if (entry->label) {
-			lv_label_set_text(entry->label, entry->name);
-		}
-		if (index == resume_index && resume_row) {
-			lv_label_set_text(settingsrow_name_label(resume_row), entry->name);
-		}
-	}
-	if (!cover || !entry->image) {
-		return false;
-	}
-	// Kept: freed by shelf_free() with everything else.
+	if (entry->has_cover) { lv_image_set_src(entry->image, NULL); cover_free(&entry->cover); }
 	entry->cover = *cover;
 	entry->has_cover = true;
 	lv_image_set_src(entry->image, &entry->cover.dsc);
@@ -123,164 +184,82 @@ static bool cover_ready(int index, const char *title, const cover_image_t *cover
 	return true;
 }
 
-// One screen of margin above and below, so the next screenful is decoded before
-// it is scrolled to and the reader never watches a cover appear.
-#define COVER_LOOKAHEAD 720
-
 static void want_visible_covers(void) {
-	if (!shelf || !shelf_count || !page_container) {
-		return;
-	}
-	// The tiles, as an array of objects, which is what ebookcovers wants: the
-	// shelf keeps them inside a struct.
-	lv_obj_t **tiles = calloc((size_t)shelf_count, sizeof(*tiles));
-	if (!tiles) {
-		return;
-	}
-	for (int i = 0; i < shelf_count; i++) {
-		tiles[i] = shelf[i].tile;
-	}
-	ebookcovers_want_visible(covers_token, page_container, tiles, shelf_count, COVER_LOOKAHEAD);
-	free(tiles);
-}
-
-static void scrolled_cb(lv_event_t *e) {
-	(void)e;
-	want_visible_covers();
-}
-
-static void worker_begin(void) {
-	if (!shelf_count || !shelf) {
-		return;
-	}
-	// One contiguous array of names is what ebookcovers wants, and the shelf
-	// keeps its names inside a struct, so they are gathered here. It is one
-	// allocation of a quarter of a kilobyte per book, freed before this returns.
-	char(*files)[256] = calloc((size_t)shelf_count, sizeof(files[0]));
-	if (!files) {
-		return;
-	}
-	for (int i = 0; i < shelf_count; i++) {
-		memcpy(files[i], shelf[i].file, sizeof(files[0]));
-	}
-	covers_token = ebookcovers_start(shelf_dir, (const char(*)[256])files, shelf_count, cover_w, cover_h, cover_ready);
-	free(files);
-	want_visible_covers();
-}
-
-// The recolour of an SVG glyph is a style set when the tile is built, which is
-// a snapshot of the theme at that moment. The shelf is rebuilt on arrival, so
-// this matters only for a theme changed while it is on screen -- from the
-// control centre, which can be pulled down over any page.
-static void shelf_theme_refresh(void) {
-	for (int i = 0; i < shelf_count; i++) {
-		if (shelf[i].glyph) {
-			lv_obj_set_style_image_recolor(shelf[i].glyph, theme()->text_secondary, 0);
-		}
-	}
-}
-
-static void shelf_free(void) {
-	// Told, not waited for: it stops within one book of here, in its own time.
-	// Joining it would hold the page being left on screen and unresponsive.
-	ebookcovers_stop(covers_token);
-	if (grid) {
-		lv_obj_clean(grid);
-	}
-	for (int i = 0; i < shelf_count; i++) {
-		if (shelf[i].has_cover) {
+	if (!shelf || !library) return;
+	lv_obj_update_layout(page_container);
+	/* Never keep the entire shelf decoded on the R1's 64 MB RAM. */
+	int first = -1, last = -1;
+	for (int i = 0; i < library->count; i++) {
+		if (near_view(i)) {
+			if (!library->entries[i].directory) { if (first < 0) first = i; last = i; }
+		} else if (shelf[i].has_cover) {
+			lv_obj_set_hidden(shelf[i].image, true);
+			lv_image_set_src(shelf[i].image, NULL);
 			cover_free(&shelf[i].cover);
+			shelf[i].has_cover = false;
+			ebookcovers_forget(covers_token, i);
 		}
 	}
-	shelf_count = 0;
-	free(shelf);
-	shelf = NULL;
+	/* An empty range must also replace an old request. */
+	ebookcovers_want(covers_token, first < 0 ? 0 : first, last);
 }
 
-static int compare_entries(const void *a, const void *b) {
-	return strcasecmp(((const shelf_entry_t *)a)->name, ((const shelf_entry_t *)b)->name);
+static void scrolled_cb(lv_event_t *e) { (void)e; want_visible_covers(); }
+static void scan_begin(bool continue_book);
+
+static void keyboard_show(bool show) {
+	keyboard_set_visible(keyboard, show);
+	int height = (int)g_cfg->screen_height - content_top - (show ? KEYBOARD_HEIGHT : 0);
+	lv_obj_set_height(page_container, height > 40 ? height : 40);
+	want_visible_covers();
 }
 
-static void scan_folder(void) {
-	snprintf(shelf_dir, sizeof(shelf_dir), "%s/Ebook", g_cfg->sd_root_path ? g_cfg->sd_root_path : "");
-
-	DIR *d = opendir(shelf_dir);
-	if (!d) {
-		return;
-	}
-	// Allocated only for as long as the page is up: a shelf that is never
-	// visited costs nothing, and one that is left gives the memory straight back.
-	if (!shelf) {
-		shelf = calloc(SHELF_MAX, sizeof(shelf_entry_t));
-	}
-	if (!shelf) {
-		closedir(d);
-		return;
-	}
-	struct dirent *de;
-	while ((de = readdir(d)) != NULL && shelf_count < SHELF_MAX) {
-		size_t len = strlen(de->d_name);
-		if (len < 6 || len >= sizeof(shelf[0].file) || strcasecmp(de->d_name + len - 5, ".epub") != 0) {
-			continue;
-		}
-		char path[800];
-		snprintf(path, sizeof(path), "%s/%s", shelf_dir, de->d_name);
-		struct stat st;
-		if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
-			continue;
-		}
-		shelf_entry_t *entry = &shelf[shelf_count];
-		memset(entry, 0, sizeof(*entry));
-		memcpy(entry->file, de->d_name, len + 1);
-		// The name without the extension, until the book is opened and says
-		// what it is really called.
-		snprintf(entry->name, sizeof(entry->name), "%.*s", (int)(len - 5), de->d_name);
-		shelf_count++;
-	}
-	closedir(d);
-
-	qsort(shelf, (size_t)shelf_count, sizeof(shelf_entry_t), compare_entries);
-	// Keep the most recently read book first without storing full paths or
-	// parsing every EPUB just to show the shelf.
-	resume_index = -1;
-	for (int i = 0; i < shelf_count; i++) {
-		char path[800];
-		entry_path(&shelf[i], path, sizeof(path));
-		if (ebookhistory_is_last(path)) {
-			shelf_entry_t recent = shelf[i];
-			memmove(shelf + 1, shelf, (size_t)i * sizeof(*shelf));
-			shelf[0] = recent;
-			resume_index = 0;
-			break;
-		}
+static void open_book_cb(lv_event_t *e) {
+	if (player_sheet_drag_active() || switcher_back_drag_active()) return;
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	if (!library || index < 0 || index >= library->count) return;
+	if (!gui_card_available()) { gui_notify_no_card(); return; }
+	ebooklibrary_entry_t *entry = &library->entries[index];
+	if (entry->directory) {
+		size_t n = strlen(root);
+		if (strncmp(entry->path, root, n) || entry->path[n] != '/') return;
+		snprintf(folder, sizeof(folder), "%s", entry->path + n + 1);
+		query[0] = 0;
+		lv_textarea_set_text(field, "");
+		keyboard_show(false);
+		scan_begin(false);
+	} else {
+		/* Opening unloads the shelf synchronously, so do not pass its memory. */
+		char book_path[EBOOKLIBRARY_PATH];
+		snprintf(book_path, sizeof(book_path), "%s", entry->path);
+		ebookreader_open(book_path);
 	}
 }
 
 static void build_tiles(void) {
 	int width = (int)g_cfg->screen_width - 2 * g_cfg->padding;
-	cover_w = (width - (TILE_COLUMNS - 1) * TILE_GAP) / TILE_COLUMNS;
-	cover_h = cover_w * COVER_RATIO_NUM / COVER_RATIO_DEN;
-
-	for (int i = 0; i < shelf_count; i++) {
+	cover_w = (width - TILE_GAP) / 2;
+	cover_h = cover_w * 3 / 2;
+	shelf = calloc((size_t)library->count, sizeof(*shelf));
+	if (!shelf) {
+		lv_label_set_text(empty_note, "Not enough memory to show books.");
+		lv_obj_set_hidden(empty_note, false);
+		return;
+	}
+	for (int i = 0; i < library->count; i++) {
+		ebooklibrary_entry_t *book = &library->entries[i];
 		shelf_entry_t *entry = &shelf[i];
-
 		lv_obj_t *tile = lv_obj_create(grid);
 		lv_obj_remove_style_all(tile);
-		lv_obj_set_size(tile, cover_w, cover_h + 46);
+		lv_obj_set_size(tile, cover_w, cover_h + 74);
 		lv_obj_set_scrollable(tile, false);
 		lv_obj_set_clickable(tile, true);
-		// The press has to reach the page under the tile as well as the tile:
-		// a clickable object swallows it by default, and the swipe that goes
-		// back is watched on the page. open_book_cb() refuses to open a book at
-		// the end of a drag, so the two do not fight.
 		lv_obj_set_event_bubble(tile, true);
 		lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
 		lv_obj_set_style_pad_row(tile, 6, 0);
 		lv_obj_add_event_cb(tile, open_book_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+		entry->tile = tile;
 
-		// What is there before the cover arrives, and what stays when the book
-		// has none: a card in the surface colour with a book glyph on it. A
-		// blank hole would read as a shelf that failed to load.
 		lv_obj_t *plate = lv_obj_create(tile);
 		lv_obj_remove_style_all(plate);
 		lv_obj_set_size(plate, cover_w, cover_h);
@@ -290,214 +269,321 @@ static void build_tiles(void) {
 		lv_obj_set_style_shadow_width(plate, 0, 0);
 		lv_obj_set_scrollable(plate, false);
 		lv_obj_set_event_bubble(plate, true);
-
-		lv_obj_t *glyph = lv_image_create(plate);
-		lv_image_set_src(glyph, &icon_ebook_cover);
-		lv_obj_center(glyph);
-		// Stored white, like every glyph drawn from an SVG, so it has to be
-		// recoloured or it is a white shape on a white card. Faint on purpose:
-		// it is what is there instead of a cover, not something to look at.
-		lv_obj_set_style_image_recolor(glyph, theme()->text_secondary, 0);
-		lv_obj_set_style_image_recolor_opa(glyph, LV_OPA_COVER, 0);
-		lv_obj_set_style_image_opa(glyph, LV_OPA_50, 0);
-		entry->glyph = glyph;
-
-		entry->image = lv_image_create(plate);
-		lv_obj_center(entry->image);
-		lv_obj_set_hidden(entry->image, true);
-		lv_obj_set_event_bubble(entry->image, true);
-
-		entry->label = lv_label_create(tile);
-		lv_label_set_long_mode(entry->label, LV_LABEL_LONG_DOT);
-		lv_obj_set_width(entry->label, cover_w);
-		lv_label_set_text(entry->label, entry->name);
-		lv_obj_add_style(entry->label, &theme_style_text, 0);
-		lv_obj_set_style_text_font(entry->label, &font_ui_18, 0);
-		lv_obj_set_style_text_align(entry->label, LV_TEXT_ALIGN_CENTER, 0);
-		lv_obj_set_event_bubble(entry->label, true);
-
-		entry->tile = tile;
+		entry->glyph = lv_image_create(plate);
+		lv_image_set_src(entry->glyph, book->directory ? &icon_folder : &icon_ebook_cover);
+		lv_obj_center(entry->glyph);
+		lv_obj_set_style_image_recolor(entry->glyph, theme()->text_secondary, 0);
+		lv_obj_set_style_image_recolor_opa(entry->glyph, LV_OPA_COVER, 0);
+		lv_obj_set_style_image_opa(entry->glyph, LV_OPA_50, 0);
+		if (book->directory) {
+			lv_obj_t *hint = lv_label_create(plate);
+			lv_label_set_text(hint, "Folder");
+			lv_obj_add_style(hint, &theme_style_text, 0);
+			lv_obj_set_style_text_font(hint, &font_ui_20, 0);
+			lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -16);
+			lv_obj_set_event_bubble(hint, true);
+		} else {
+			entry->image = lv_image_create(plate);
+			lv_obj_center(entry->image);
+			lv_obj_set_hidden(entry->image, true);
+			lv_obj_set_event_bubble(entry->image, true);
+		}
+		lv_obj_t *label = lv_label_create(tile);
+		lv_obj_set_size(label, cover_w, 42);
+		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+		lv_label_set_text(label, book->title);
+		lv_obj_add_style(label, &theme_style_text, 0);
+		lv_obj_set_style_text_font(label, &font_ui_18, 0);
+		lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_event_bubble(label, true);
+		lv_obj_t *author = lv_label_create(tile);
+		lv_obj_set_size(author, cover_w, 24);
+		lv_label_set_long_mode(author, LV_LABEL_LONG_DOT);
+		lv_label_set_text(author, book->directory ? "Open folder" : book->author);
+		lv_obj_add_style(author, &theme_style_text_dim, 0);
+		lv_obj_set_style_text_font(author, &font_ui_18, 0);
+		lv_obj_set_style_text_align(author, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_event_bubble(author, true);
+		if (!book->directory && ebookhistory_is_last(book->path)) resume_index = i;
+	}
+	if (resume_index >= 0) {
+		char text[300];
+		snprintf(text, sizeof(text), "Continue: %s", library->entries[resume_index].title);
+		lv_label_set_text(settingsrow_name_label(resume_row), text);
+		lv_obj_set_hidden(resume_row, false);
+	}
+	char (*paths)[800] = calloc((size_t)library->count, sizeof(*paths));
+	if (paths) {
+		for (int i = 0; i < library->count; i++) if (!library->entries[i].directory)
+			snprintf(paths[i], sizeof(paths[i]), "%s", library->entries[i].path);
+		covers_token = ebookcovers_start_paths((const char (*)[800])paths, library->count, cover_w, cover_h, cover_ready);
+		free(paths);
+		want_visible_covers();
 	}
 }
 
-// The same shape the Music page's corner buttons have, so the two pages read
-// as the same kind of page.
-static lv_obj_t *corner_button(gui_config_t *cfg, int slot, const lv_image_dsc_t *glyph) {
-	lv_obj_t *button = lv_btn_create(ebookpage_screen);
-	lv_obj_set_size(button, 56, 56);
-	lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(button, 0, 0);
-	lv_obj_set_style_shadow_width(button, 0, 0);
-	lv_obj_set_style_pad_all(button, 0, 0);
-	lv_obj_align(button, LV_ALIGN_TOP_RIGHT, -cfg->padding - slot * (56 + 6), cfg->padding + cfg->top_bar_height);
-
-	lv_obj_t *icon = lv_image_create(button);
-	lv_image_set_src(icon, glyph);
-	// A style and not a recolour: a style follows the theme by itself.
-	lv_obj_add_style(icon, &theme_style_icon, 0);
-	lv_obj_center(icon);
-	return button;
+static void scan_done_cb(lv_timer_t *timer) {
+	pthread_mutex_lock(&scan_lock);
+	scan_result_t *result = completed_scan;
+	completed_scan = NULL;
+	pthread_mutex_unlock(&scan_lock);
+	if (!result) {
+		if (active && atomic_load(&failed_generation) == atomic_load(&scan_generation)) {
+			lv_label_set_text(empty_note, "Not enough memory to scan books.");
+			lv_timer_pause(timer);
+		}
+		return;
+	}
+	if (!active || result->generation != atomic_load(&scan_generation)) { result_free(result); return; }
+	lv_timer_pause(timer);
+	if (result->continue_book) {
+		char book_path[EBOOKLIBRARY_PATH];
+		snprintf(book_path, sizeof(book_path), "%s", result->continue_path);
+		result_free(result);
+		if (book_path[0] && gui_card_available()) {
+			ebookreader_open(book_path);
+			if (active) scan_begin(false); /* unreadable book: return to a usable shelf */
+		}
+		else scan_begin(false);
+		return;
+	}
+	library = result->books;
+	result->books = NULL;
+	result_free(result);
+	if (!gui_card_available()) {
+		shelf_free();
+		lv_label_set_text(empty_note, tr("books_card_unavailable"));
+		return;
+	}
+	if (!library) { lv_label_set_text(empty_note, "Not enough memory to read the library."); return; }
+	if (library->unavailable) lv_label_set_text(empty_note, "Folder unavailable. Check the SD card or use Up.");
+	else if (!library->count) lv_label_set_text(empty_note, library->truncated ?
+		"Search limit reached. Browse a subfolder to find books beyond the limit." :
+		(query[0] ? "No matching books in Ebook or its subfolders." : "No books here. Copy EPUB books or folders into Ebook on the SD card."));
+	else {
+		lv_obj_set_hidden(empty_note, !library->truncated && !library->unreadable);
+		lv_label_set_text(empty_note, library->truncated ? "Library limit reached. Showing up to 300 results; browse a subfolder or narrow your search." : "Some folders could not be read.");
+		build_tiles();
+	}
 }
 
+static void refresh_nav(void) {
+	char text[900];
+	snprintf(text, sizeof(text), "%s%s", query[0] ? "Search all Ebook folders" : "Ebook", !query[0] && folder[0] ? "/" : "");
+	if (!query[0] && folder[0]) strncat(text, folder, sizeof(text) - strlen(text) - 1);
+	lv_label_set_text(breadcrumb, text);
+	lv_obj_set_hidden(up_button, !query[0] && !folder[0]);
+}
+
+static void scan_begin(bool continue_book) {
+	scan_cancel();
+	lv_timer_pause(scan_timer);
+	shelf_free();
+	refresh_nav();
+	lv_obj_scroll_to_y(page_container, 0, LV_ANIM_OFF);
+	lv_obj_set_hidden(empty_note, false);
+	if (!gui_card_available()) { lv_label_set_text(empty_note, tr("books_card_unavailable")); return; }
+	lv_label_set_text(empty_note, continue_book ? "Finding your last book..." : "Reading book titles and authors...");
+	if (!scan_worker_started) {
+		pthread_t worker;
+		if (pthread_create(&worker, NULL, scan_worker, NULL) != 0) {
+			lv_label_set_text(empty_note, "Could not start the library scan. Reopen Books to try again.");
+			return;
+		}
+		pthread_detach(worker);
+		scan_worker_started = true;
+	}
+	scan_request_t *request = calloc(1, sizeof(*request));
+	if (!request) { lv_label_set_text(empty_note, "Not enough memory to scan books."); return; }
+	request->generation = atomic_load(&scan_generation);
+	request->sort = sort_order;
+	request->continue_book = continue_book;
+	snprintf(request->last_key, sizeof(request->last_key), "%s", config_store_get(config_ebook_store(), "ebook", "last_book", ""));
+	snprintf(request->root, sizeof(request->root), "%s", root);
+	snprintf(request->folder, sizeof(request->folder), "%s", folder);
+	snprintf(request->query, sizeof(request->query), "%s", query);
+	snprintf(request->cache, sizeof(request->cache), "%s/.local/ebook-meta", g_cfg->sd_root_path ? g_cfg->sd_root_path : "");
+	pthread_mutex_lock(&scan_lock);
+	pending_scan = request;
+	pthread_cond_signal(&scan_wake);
+	pthread_mutex_unlock(&scan_lock);
+	lv_timer_resume(scan_timer);
+}
+
+static void search_cb(lv_event_t *e) {
+	(void)e;
+	snprintf(query, sizeof(query), "%s", lv_textarea_get_text(field));
+	/* Whitespace-only searches are the normal folder view. */
+	char *p = query;
+	while (*p == ' ' || *p == '\t') p++;
+	memmove(query, p, strlen(p) + 1);
+	size_t n = strlen(query);
+	while (n && (query[n - 1] == ' ' || query[n - 1] == '\t')) query[--n] = 0;
+	lv_textarea_set_text(field, query);
+	keyboard_show(false);
+	scan_begin(false);
+}
+
+static void field_cb(lv_event_t *e) { (void)e; keyboard_show(true); }
+static void clear_cb(lv_event_t *e) {
+	(void)e; query[0] = 0; lv_textarea_set_text(field, ""); keyboard_show(false); scan_begin(false);
+}
+static void up_cb(lv_event_t *e) {
+	(void)e;
+	if (player_sheet_drag_active() || switcher_back_drag_active()) return;
+	if (query[0]) { query[0] = 0; lv_textarea_set_text(field, ""); }
+	else { char *slash = strrchr(folder, '/'); if (slash) *slash = 0; else folder[0] = 0; }
+	keyboard_show(false);
+	scan_begin(false);
+}
+static void sort_choose(void *user) {
+	sort_order = (ebooklibrary_sort_t)(intptr_t)user;
+	config_store_set_int(config_ebook_store(), "ebook", "library_sort", sort_order);
+	config_store_save(config_ebook_store());
+	lv_label_set_text(lv_obj_get_child(sort_button, 0), sort_names[sort_order]);
+	keyboard_show(false);
+	scan_begin(false);
+}
+static void sort_cb(lv_event_t *e) {
+	(void)e;
+	if (player_sheet_drag_active() || switcher_back_drag_active()) return;
+	popover_item_t items[EBOOKLIBRARY_SORT_COUNT];
+	for (int i = 0; i < EBOOKLIBRARY_SORT_COUNT; i++) items[i] = (popover_item_t){
+		.label = sort_names[i], .action = sort_choose, .user = (void *)(intptr_t)i, .checked = (int)sort_order == i};
+	popover_show(sort_button, items, EBOOKLIBRARY_SORT_COUNT);
+}
+static void resume_cb(lv_event_t *e) {
+	(void)e;
+	if (resume_index < 0) return;
+	/* open_book_cb copies the path before changing screens. */
+	if (player_sheet_drag_active() || switcher_back_drag_active() || !library) return;
+	if (!gui_card_available()) { gui_notify_no_card(); return; }
+	char book_path[EBOOKLIBRARY_PATH];
+	snprintf(book_path, sizeof(book_path), "%s", library->entries[resume_index].path);
+	ebookreader_open(book_path);
+}
 static void settings_cb(lv_event_t *e) {
-	(void)e;
-	if (player_sheet_drag_active() || switcher_back_drag_active()) {
-		return;
-	}
-	switch_screen(ebooksettings_screen);
+	(void)e; if (!player_sheet_drag_active() && !switcher_back_drag_active()) switch_screen(ebooksettings_screen);
 }
-
 static void bookmarks_cb(lv_event_t *e) {
-	(void)e;
-	if (player_sheet_drag_active() || switcher_back_drag_active()) {
-		return;
-	}
-	ebookmarkspage_open();
+	(void)e; if (!player_sheet_drag_active() && !switcher_back_drag_active()) ebookmarkspage_open();
 }
 
 void ebookpage_open(void) {
-	if (!gui_card_available()) {
-		gui_notify_no_card();
-		return;
-	}
+	if (!gui_card_available()) { gui_notify_no_card(); return; }
 	switch_screen(ebookpage_screen);
 }
-
 void ebookpage_continue(void) {
-	if (!gui_card_available()) {
-		gui_notify_no_card();
-		return;
-	}
-	char folder[512], path[800];
-	int n = snprintf(folder, sizeof(folder), "%s/Ebook", g_cfg->sd_root_path ? g_cfg->sd_root_path : "");
-	if (n < 0 || (size_t)n >= sizeof(folder) || !ebookhistory_find_last(folder, path, sizeof(path))) {
-		ebookpage_open();
-		return;
-	}
-	// The reader's Close action should return to the shelf, even when entered
-	// directly from Home. Build that history before opening the book.
+	if (!gui_card_available()) { gui_notify_no_card(); return; }
 	switch_screen(ebookpage_screen);
-	ebookreader_open(path);
+	/* Resolve nested paths off the UI thread, without parsing books. */
+	scan_begin(true);
 }
-
-static void resume_cb(lv_event_t *e) {
-	(void)e;
-	if (player_sheet_drag_active() || switcher_back_drag_active()) {
-		return;
-	}
-	if (resume_index >= 0 && resume_index < shelf_count) {
-		char path[800];
-		entry_path(&shelf[resume_index], path, sizeof(path));
-		ebookreader_open(path);
-	}
-}
-
-// The shelf is built on arrival and not in ebookpage_open(), because arriving
-// is not only what the More page's tile does: closing a book comes back here
-// through the history, and a shelf built only on the way in would be an empty
-// page every time a reader put a book down.
 static void loaded_cb(lv_event_t *e) {
-	(void)e;
-	shelf_free();
-	resume_index = -1;
-	if (!gui_card_available()) {
-		lv_obj_set_hidden(resume_heading, true);
-		lv_obj_set_hidden(resume_row, true);
-		lv_label_set_text(empty_note, tr("books_card_unavailable"));
-		lv_obj_set_hidden(empty_note, false);
-		return;
-	}
-	scan_folder();
-	lv_label_set_text(empty_note, tr("ebook_empty_note"));
-	lv_obj_set_hidden(resume_heading, resume_index < 0);
-	lv_obj_set_hidden(resume_row, resume_index < 0);
-	if (resume_index >= 0) {
-		lv_label_set_text(settingsrow_name_label(resume_row), shelf[resume_index].name);
-	}
-
-	if (shelf_count) {
-		lv_obj_set_hidden(empty_note, true);
-		build_tiles();
-		worker_begin();
-	} else {
-		lv_obj_set_hidden(empty_note, false);
-	}
+	(void)e; active = true;
+	int n = snprintf(root, sizeof(root), "%s/Ebook", g_cfg->sd_root_path ? g_cfg->sd_root_path : "");
+	if (n < 0 || (size_t)n >= sizeof(root)) root[0] = 0;
+	keyboard_show(false);
+	scan_begin(false);
+}
+static void unloaded_cb(lv_event_t *e) {
+	(void)e; active = false; scan_cancel(); lv_timer_pause(scan_timer); popover_close(); keyboard_show(false); shelf_free();
+}
+static void shelf_theme_refresh(void) {
+	if (!shelf || !library) return;
+	for (int i = 0; i < library->count; i++) if (shelf[i].glyph)
+		lv_obj_set_style_image_recolor(shelf[i].glyph, theme()->text_secondary, 0);
 }
 
-// The shelf is not kept while the page is away: the covers are a megabyte or
-// two of decoded pixels, and the page is rebuilt in a moment when it comes back.
-static void unloaded_cb(lv_event_t *e) {
-	(void)e;
-	shelf_free();
+static lv_obj_t *text_button(lv_obj_t *parent, const char *text, int width, lv_event_cb_t cb) {
+	lv_obj_t *button = lv_btn_create(parent);
+	lv_obj_set_size(button, width, 48);
+	lv_obj_add_style(button, &theme_style_card, 0);
+	lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_t *label = lv_label_create(button);
+	lv_label_set_text(label, text);
+	lv_obj_add_style(label, &theme_style_text, 0);
+	lv_obj_set_style_text_font(label, &font_ui_18, 0);
+	lv_obj_center(label);
+	return button;
 }
 
 void ebookpage_init(gui_config_t *cfg) {
 	g_cfg = cfg;
-
 	ebookpage_screen = lv_obj_create(NULL);
 	lv_obj_add_style(ebookpage_screen, &theme_style_screen, 0);
-
-	lv_obj_t *container = settingsrow_page(ebookpage_screen, cfg, "books");
-	page_container = container;
-	// Both ends of a flick: SCROLL keeps up with a slow drag, SCROLL_END catches
-	// where a fast one landed.
-	lv_obj_add_event_cb(container, scrolled_cb, LV_EVENT_SCROLL, NULL);
-	lv_obj_add_event_cb(container, scrolled_cb, LV_EVENT_SCROLL_END, NULL);
-	// One button in the corner, so the heading has to be told to keep clear of
-	// it -- the same arrangement the Music page has.
+	page_container = settingsrow_page(ebookpage_screen, cfg, "books");
 	settingsrow_title_corner_slots(settingsrow_page_title(ebookpage_screen), cfg, 2);
-
-	lv_obj_t *settings_btn = corner_button(cfg, 0, &icon_music_settings);
-	lv_obj_add_event_cb(settings_btn, settings_cb, LV_EVENT_CLICKED, NULL);
-
-	lv_obj_t *marks_btn = lv_btn_create(ebookpage_screen);
-	lv_obj_set_size(marks_btn, 56, 56);
-	lv_obj_set_style_bg_opa(marks_btn, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(marks_btn, 0, 0);
-	lv_obj_set_style_shadow_width(marks_btn, 0, 0);
-	lv_obj_set_style_pad_all(marks_btn, 0, 0);
-	lv_obj_align(marks_btn, LV_ALIGN_TOP_RIGHT, -cfg->padding - (56 + 6), cfg->padding + cfg->top_bar_height);
-	lv_obj_add_event_cb(marks_btn, bookmarks_cb, LV_EVENT_CLICKED, NULL);
-
-	lv_obj_t *marks_icon = lv_image_create(marks_btn);
-	lv_image_set_src(marks_icon, &icon_bookmark);
-	// A style and not a recolour: a style follows the theme by itself.
-	lv_obj_add_style(marks_icon, &theme_style_icon, 0);
-	lv_obj_center(marks_icon);
-	lv_obj_set_style_pad_row(container, TILE_GAP, 0);
-	resume_heading = settingsrow_heading(container, "books_continue");
-	resume_row = settingsrow_action(container, "", resume_cb, NULL);
-	settingsrow_name_lines(resume_row, 2);
-	lv_obj_set_hidden(resume_heading, true);
+	for (int i = 0; i < 2; i++) {
+		lv_obj_t *button = lv_btn_create(ebookpage_screen);
+		lv_obj_set_size(button, 56, 56);
+		lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(button, 0, 0);
+		lv_obj_set_style_shadow_width(button, 0, 0);
+		lv_obj_set_style_pad_all(button, 0, 0);
+		lv_obj_align(button, LV_ALIGN_TOP_RIGHT, -cfg->padding - i * 62, cfg->padding + cfg->top_bar_height);
+		lv_obj_add_event_cb(button, i ? bookmarks_cb : settings_cb, LV_EVENT_CLICKED, NULL);
+		lv_obj_t *icon = lv_image_create(button);
+		lv_image_set_src(icon, i ? &icon_bookmark : &icon_music_settings);
+		lv_obj_add_style(icon, &theme_style_icon, 0);
+		lv_obj_center(icon);
+	}
+	int top = settingsrow_content_top(cfg), width = cfg->screen_width - 2 * cfg->padding;
+	field = lv_textarea_create(ebookpage_screen);
+	lv_textarea_set_one_line(field, true);
+	lv_textarea_set_max_length(field, 60); /* fits query buffer even with 4-byte code points */
+	lv_textarea_set_placeholder_text(field, "Title or author (all folders)");
+	lv_obj_set_size(field, width - 66, 62);
+	lv_obj_set_pos(field, cfg->padding, top);
+	lv_obj_add_style(field, &theme_style_card, 0);
+	lv_obj_set_style_text_font(field, &font_ui_18, 0);
+	keyboard_style_caret(field);
+	lv_obj_add_event_cb(field, field_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_t *clear = text_button(ebookpage_screen, "Clear", 60, clear_cb);
+	lv_obj_set_pos(clear, cfg->screen_width - cfg->padding - 60, top + 7);
+	up_button = text_button(ebookpage_screen, "Up", 58, up_cb);
+	lv_obj_set_pos(up_button, cfg->padding, top + 70);
+	breadcrumb = lv_label_create(ebookpage_screen);
+	lv_obj_set_pos(breadcrumb, cfg->padding + 66, top + 82);
+	lv_obj_set_size(breadcrumb, width - 66 - 146, 24);
+	lv_label_set_long_mode(breadcrumb, LV_LABEL_LONG_DOT);
+	lv_obj_add_style(breadcrumb, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(breadcrumb, &font_ui_18, 0);
+	sort_order = config_store_get_int(config_ebook_store(), "ebook", "library_sort", EBOOKLIBRARY_TITLE);
+	if (sort_order < 0 || sort_order >= EBOOKLIBRARY_SORT_COUNT) sort_order = EBOOKLIBRARY_TITLE;
+	sort_button = text_button(ebookpage_screen, sort_names[sort_order], 140, sort_cb);
+	lv_obj_set_pos(sort_button, cfg->screen_width - cfg->padding - 140, top + 70);
+	content_top = top + 126;
+	lv_obj_set_y(page_container, content_top);
+	lv_obj_set_height(page_container, cfg->screen_height - content_top);
+	lv_obj_set_style_pad_row(page_container, TILE_GAP, 0);
+	lv_obj_add_event_cb(page_container, scrolled_cb, LV_EVENT_SCROLL, NULL);
+	lv_obj_add_event_cb(page_container, scrolled_cb, LV_EVENT_SCROLL_END, NULL);
+	resume_row = settingsrow_action(page_container, "", resume_cb, NULL);
+	settingsrow_name_lines(resume_row, 1);
+	lv_obj_set_height(resume_row, 60);
 	lv_obj_set_hidden(resume_row, true);
-
-	grid = lv_obj_create(container);
+	empty_note = lv_label_create(page_container);
+	lv_obj_set_width(empty_note, lv_pct(100));
+	lv_label_set_long_mode(empty_note, LV_LABEL_LONG_WRAP);
+	lv_obj_add_style(empty_note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(empty_note, &font_ui_20, 0);
+	grid = lv_obj_create(page_container);
 	lv_obj_remove_style_all(grid);
 	lv_obj_set_size(grid, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
 	lv_obj_set_style_pad_column(grid, TILE_GAP, 0);
 	lv_obj_set_style_pad_row(grid, TILE_GAP, 0);
 	lv_obj_set_scrollable(grid, false);
-	// Bubbling is one step at a time: the tile passes the press to this, and
-	// without this it stops here instead of reaching the container, which is
-	// where the swipe that goes back is watched.
 	lv_obj_set_event_bubble(grid, true);
-
-	empty_note = lv_label_create(container);
-	lv_label_set_long_mode(empty_note, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(empty_note, lv_pct(100));
-	lv_obj_add_style(empty_note, &theme_style_text_dim, 0);
-	lv_obj_set_style_text_font(empty_note, &font_ui_20, 0);
-	lv_obj_set_style_text_align(empty_note, LV_TEXT_ALIGN_CENTER, 0);
-	lv_label_set_text(empty_note, tr("ebook_empty_note"));
-	lv_obj_set_hidden(empty_note, true);
-
+	keyboard = keyboard_create(ebookpage_screen, cfg->screen_width, KEYBOARD_HEIGHT, field, &icon_search, NULL, search_cb, NULL);
+	keyboard_set_visible(keyboard, false);
+	scan_timer = lv_timer_create(scan_done_cb, 100, NULL);
+	lv_timer_pause(scan_timer);
 	lv_obj_add_event_cb(ebookpage_screen, loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
 	lv_obj_add_event_cb(ebookpage_screen, unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 	switcher_attach_back_gesture(ebookpage_screen);
-	// And on the container too: it is the surface that scrolls, and a press that
-	// lands on it rather than on a tile has to start the same gesture.
-	switcher_attach_back_gesture(container);
-	player_sheet_attach_drag(container, true);
+	switcher_attach_back_gesture(page_container);
+	player_sheet_attach_drag(page_container, true);
 	theme_register_refresh(shelf_theme_refresh);
 }

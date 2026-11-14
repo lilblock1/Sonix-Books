@@ -8,6 +8,7 @@
 
 #include "src/system/ebook/bookmarks.h"
 #include "src/system/ebook/ebook.h"
+#include "src/system/ebook/ebooklibrary.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookcovers.h"
 #include "src/gui/ebook/ebookreader.h"
@@ -46,7 +47,7 @@ lv_obj_t *ebookmarkbookpage_screen;
 #define ROW_COVER_H 84
 
 typedef struct {
-	char file[256];
+	char file[800]; // full path, including nested Ebook folders
 	char name[256];
 	int count; // how many bookmarks
 	lv_obj_t *image;
@@ -64,7 +65,7 @@ static lv_obj_t *marks_title;
 
 static book_entry_t *books;
 static int book_count;
-static char books_dir[512];
+static char books_dir[800];
 static uint32_t covers_token;
 
 // Which book the second page is showing.
@@ -72,7 +73,7 @@ static char open_book_path[800];
 static char open_book_name[256];
 
 static void entry_path(const book_entry_t *entry, char *out, size_t size) {
-	snprintf(out, size, "%s/%s", books_dir, entry->file);
+	snprintf(out, size, "%s", entry->file);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,44 +237,30 @@ static int compare_entries(const void *a, const void *b) {
 	return strcasecmp(((const book_entry_t *)a)->name, ((const book_entry_t *)b)->name);
 }
 
-static void scan_folder(void) {
-	snprintf(books_dir, sizeof(books_dir), "%s/Ebook", g_cfg->sd_root_path ? g_cfg->sd_root_path : "");
-
-	DIR *d = opendir(books_dir);
-	if (!d) {
-		return;
-	}
-	if (!books) {
-		books = calloc(BOOKS_MAX, sizeof(book_entry_t));
-	}
-	if (!books) {
-		closedir(d);
-		return;
-	}
-
-	struct dirent *de;
-	while ((de = readdir(d)) != NULL && book_count < BOOKS_MAX) {
-		size_t len = strlen(de->d_name);
-		if (len < 6 || len >= sizeof(books[0].file) || strcasecmp(de->d_name + len - 5, ".epub") != 0) {
-			continue;
-		}
-		char path[800];
-		snprintf(path, sizeof(path), "%s/%s", books_dir, de->d_name);
-		int marks = bookmark_count(path);
-		if (marks <= 0) {
-			continue; // a book nobody has marked is not on this page
-		}
-
-		book_entry_t *entry = &books[book_count];
-		memset(entry, 0, sizeof(*entry));
-		memcpy(entry->file, de->d_name, len + 1);
-		snprintf(entry->name, sizeof(entry->name), "%.*s", (int)(len - 5), de->d_name);
+/* The match callback collects bookmarked files and asks the shared bounded
+ * walker to stop when the list is full. It does not open any EPUB metadata. */
+static bool collect_marked_book(const char *path, void *unused) {
+	(void)unused;
+	int marks = bookmark_count(path);
+	if (marks > 0 && book_count < BOOKS_MAX) {
+		book_entry_t *entry = &books[book_count++];
+		snprintf(entry->file, sizeof(entry->file), "%s", path);
+		const char *base = strrchr(path, '/');
+		base = base ? base + 1 : path;
+		snprintf(entry->name, sizeof(entry->name), "%.*s", (int)strlen(base) - 5, base);
 		entry->count = marks;
-		book_count++;
 	}
-	closedir(d);
+	return book_count == BOOKS_MAX;
+}
 
-	qsort(books, (size_t)book_count, sizeof(book_entry_t), compare_entries);
+static void scan_folder(void) {
+	int n = snprintf(books_dir, sizeof(books_dir), "%s/Ebook", g_cfg->sd_root_path ? g_cfg->sd_root_path : "");
+	if (n < 0 || (size_t)n >= sizeof(books_dir)) return;
+	books = calloc(BOOKS_MAX, sizeof(*books));
+	if (!books) return;
+	char last[800];
+	(void)ebooklibrary_find(books_dir, collect_marked_book, NULL, last, sizeof(last), NULL);
+	qsort(books, (size_t)book_count, sizeof(*books), compare_entries);
 }
 
 static void build_rows(void) {
@@ -373,7 +360,7 @@ static void covers_begin(void) {
 	if (!book_count || !books) {
 		return;
 	}
-	char(*files)[256] = calloc((size_t)book_count, sizeof(files[0]));
+	char(*files)[800] = calloc((size_t)book_count, sizeof(files[0]));
 	if (!files) {
 		return;
 	}
@@ -381,7 +368,7 @@ static void covers_begin(void) {
 		memcpy(files[i], books[i].file, sizeof(files[0]));
 	}
 	covers_token =
-		ebookcovers_start(books_dir, (const char(*)[256])files, book_count, ROW_COVER_W, ROW_COVER_H, cover_ready);
+		ebookcovers_start_paths((const char(*)[800])files, book_count, ROW_COVER_W, ROW_COVER_H, cover_ready);
 	free(files);
 	want_visible_covers();
 }

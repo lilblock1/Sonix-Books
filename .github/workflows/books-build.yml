@@ -66,6 +66,15 @@ jobs:
             src/system/ebook/bookmarks.c src/system/core/config.c \
             -o build_tests/test_ebookhistory
           ./build_tests/test_ebookhistory
+      - name: Test library search, folders, sorting and metadata cache
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. \
+            tests/test_ebooklibrary.c src/system/ebook/ebooklibrary.c \
+            -o build_tests/test_ebooklibrary
+          fixture=$(mktemp -d)
+          trap 'rm -rf -- "$fixture"' EXIT
+          ./build_tests/test_ebooklibrary "$fixture"
       - name: Check language resources and fork update destination
         run: python3 sonix-player/tests/check_resources.py
       - name: Test Wi-Fi update policy

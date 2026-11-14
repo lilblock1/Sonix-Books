@@ -49,6 +49,13 @@ typedef bool (*ebookcovers_ready_cb)(int index, const char *title, const cover_i
 uint32_t ebookcovers_start(const char *dir, const char (*files)[256], int count, int box_w, int box_h,
 						   ebookcovers_ready_cb cb);
 
+// Full paths allow a recursive library search to show books from different folders.
+uint32_t ebookcovers_start_paths(const char (*paths)[800], int count, int box_w, int box_h, ebookcovers_ready_cb cb);
+
+// UI thread only, after disconnecting/freeing a retained cover (or rejecting a
+// delivered result). Allows a later visible range to request that cover again.
+void ebookcovers_forget(uint32_t token, int index);
+
 // Asks for the covers of `from`..`to` inclusive, soonest first. Cheap and
 // idempotent: call it on every scroll. A book already fetched is not fetched
 // again, and a range that no longer includes a book the worker has not reached

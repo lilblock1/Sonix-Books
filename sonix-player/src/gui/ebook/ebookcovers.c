@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "src/system/ebook/ebook.h"
 #include "src/gui/shell/gui.h"
@@ -14,11 +15,10 @@
 
 typedef struct {
 	uint32_t gen;
-	char dir[512];
 	int count;
 	int box_w, box_h;
 	ebookcovers_ready_cb cb;
-	char (*files)[256]; // the worker's own copy; it frees this
+	char (*files)[800]; // the worker's own copy; it frees this
 	uint8_t *done;		// one byte per book: asked for and finished with
 
 	// What the page wants now. Written by the UI thread under `lock`, read by
@@ -40,10 +40,8 @@ typedef struct {
 	bool has_cover;
 } covers_result_t;
 
-// Bumped by every start and every stop. Read by the worker without a lock: one
-// aligned word, one writer (the UI thread), and the worst a torn read could do
-// is one more book being opened before the worker gives up.
-static volatile uint32_t covers_gen = 1;
+// One UI-thread writer; the worker observes cancellation atomically.
+static _Atomic uint32_t covers_gen = 1;
 
 // The job the current run belongs to. Only the UI thread touches this pointer;
 // the worker has its own copy and frees it.
@@ -105,8 +103,8 @@ static void *worker_main(void *arg) {
 			break;
 		}
 
-		char path[800];
-		snprintf(path, sizeof(path), "%s/%s", job->dir, job->files[index]);
+		const char *path = job->files[index];
+		if (!path[0]) continue; // folder tiles have no cover
 
 		covers_result_t *result = calloc(1, sizeof(*result));
 		if (!result) {
@@ -118,7 +116,7 @@ static void *worker_main(void *arg) {
 
 		// The cache first: a book seen before is one read, not a ZIP opened
 		// and a picture decoded.
-		char title[256];
+		char title[256] = "";
 		bool has_cover = false;
 		if (cover_book_cached(path, job->box_w, job->box_h, &result->cover, &has_cover, title, sizeof(title))) {
 			result->has_cover = has_cover;
@@ -144,7 +142,7 @@ static void *worker_main(void *arg) {
 			}
 			free(bytes);
 		}
-		snprintf(result->title, sizeof(result->title), "%s", title[0] ? title : job->files[index]);
+		snprintf(result->title, sizeof(result->title), "%s", title[0] ? title : (strrchr(path, '/') ? strrchr(path, '/') + 1 : path));
 
 		if (job->gen != covers_gen || !gui_post(covers_ready, result)) {
 			// The page went away while this book was being read, or the queue
@@ -180,9 +178,10 @@ void ebookcovers_stop(uint32_t token) {
 }
 
 void ebookcovers_want(uint32_t token, int from, int to) {
-	if (token != covers_gen || !current_job || to < from) {
+	if (token != covers_gen || !current_job) {
 		return;
 	}
+	if (to < from) { from = 0; to = -1; }
 	pthread_mutex_lock(&current_job->lock);
 	current_job->want_from = from;
 	current_job->want_to = to;
@@ -221,10 +220,10 @@ void ebookcovers_want_visible(uint32_t token, lv_obj_t *view, lv_obj_t *const *i
 	}
 }
 
-uint32_t ebookcovers_start(const char *dir, const char (*files)[256], int count, int box_w, int box_h,
+static uint32_t start(const char *dir, const char (*names)[256], const char (*paths)[800], int count, int box_w, int box_h,
 						   ebookcovers_ready_cb cb) {
 	ebookcovers_stop(covers_gen); // whatever was running belongs to a page that has moved on
-	if (!dir || !files || count <= 0 || !cb) {
+	if ((!paths && (!dir || !names)) || count <= 0 || !cb) {
 		return covers_gen;
 	}
 
@@ -252,8 +251,11 @@ uint32_t ebookcovers_start(const char *dir, const char (*files)[256], int count,
 	// top of a list it may never need the top of.
 	job->want_from = 0;
 	job->want_to = -1;
-	snprintf(job->dir, sizeof(job->dir), "%s", dir);
-	memcpy(job->files, files, (size_t)count * sizeof(job->files[0]));
+	for (int i = 0; i < count; i++) {
+		int n = paths ? snprintf(job->files[i], sizeof(job->files[i]), "%s", paths[i])
+			: snprintf(job->files[i], sizeof(job->files[i]), "%s/%s", dir, names[i]);
+		if (n < 0 || (size_t)n >= sizeof(job->files[i])) job->files[i][0] = 0;
+	}
 
 	pthread_t thread;
 	pthread_attr_t attr;
@@ -269,4 +271,20 @@ uint32_t ebookcovers_start(const char *dir, const char (*files)[256], int count,
 	}
 	current_job = job;
 	return covers_gen;
+}
+
+uint32_t ebookcovers_start(const char *dir, const char (*files)[256], int count, int w, int h, ebookcovers_ready_cb cb) {
+	return start(dir, files, NULL, count, w, h, cb);
+}
+
+uint32_t ebookcovers_start_paths(const char (*paths)[800], int count, int w, int h, ebookcovers_ready_cb cb) {
+	return start(NULL, NULL, paths, count, w, h, cb);
+}
+
+void ebookcovers_forget(uint32_t token, int index) {
+	if (token != covers_gen || !current_job || index < 0 || index >= current_job->count) return;
+	pthread_mutex_lock(&current_job->lock);
+	current_job->done[index] = 0;
+	pthread_cond_signal(&current_job->wake);
+	pthread_mutex_unlock(&current_job->lock);
 }

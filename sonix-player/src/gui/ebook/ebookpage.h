@@ -9,7 +9,8 @@ extern lv_obj_t *ebookpage_screen;
 
 void ebookpage_init(gui_config_t *cfg);
 
-// Reads the Ebook folder again and shows the shelf. What the tile on the Home
+// Reads the current Ebook folder in the background and shows the shelf.
+// Search spans all Ebook subfolders. What the tile on the Home
 // page calls, so a book copied onto the card while the player was running
 // turns up without a restart.
 void ebookpage_open(void);

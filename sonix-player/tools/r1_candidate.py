@@ -162,7 +162,10 @@ def build(base, player, repository, output):
         require(set(changed) <= allowed, "An unexpected system file changed")
         # No kernel, module, boot script, system-library or flash-layout overlay.
         new_rootfs = work / "new.squashfs"
-        run("mksquashfs", root, new_rootfs, "-comp", "lzo", "-b", "131072", "-all-root", "-noappend", "-no-progress")
+        # Same LZO format and block size as the base; spend more build CPU on
+        # compression rather than increasing the accepted flash footprint.
+        run("mksquashfs", root, new_rootfs, "-comp", "lzo", "-Xalgorithm", "lzo1x_999",
+            "-Xcompression-level", "9", "-b", "131072", "-all-root", "-noappend", "-no-progress")
         data = new_rootfs.read_bytes()
         rechecked_root = work / "rechecked-root"
         run("unsquashfs", "-no-progress", "-d", rechecked_root, new_rootfs)

@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: books-checks-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   r1-base:
     runs-on: ubuntu-24.04

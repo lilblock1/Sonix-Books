@@ -178,7 +178,9 @@ def build(base, player, repository, output):
         verified_records, verified_images = verify_images(ota)
         require(verified_images["xImage"] == images["xImage"], "Kernel changed")
         require(verified_records[0] == records[0], "Kernel flash metadata changed")
-        image = output / "r1.upt"
+        # Keep an unverified container out of the artifact directory even if
+        # the final re-read fails.
+        image = work / "r1.upt"
         run("genisoimage", "-o", image, "-J", "-r", iso)
         # Re-read the final container, not just the directory it came from.
         final = work / "final"
@@ -188,6 +190,7 @@ def build(base, player, repository, output):
         report.update(image_sha256=digest(image.read_bytes()), image_bytes=image.stat().st_size,
                       structural_checks_passed=True,
                       kernel_write_warning="The standard updater can rewrite the identical kernel; this is not an A/B update.")
+        shutil.copyfile(image, output / "r1.upt")
         (output / "r1-build-report.json").write_text(json.dumps(report, indent=2) + "\n")
         (output / "SHA256SUMS").write_text(report["image_sha256"] + "  r1.upt\n")
         (output / "FLASH_NOT_APPROVED.txt").write_text(

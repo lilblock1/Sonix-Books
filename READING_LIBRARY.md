@@ -1,4 +1,4 @@
-# Reading library — item 1
+# Reading library — items 1 and 2
 
 Source work on `reading-overhaul`; no firmware update has been built or
 published for this feature. Keep the tested `main` firmware until the complete
@@ -21,6 +21,31 @@ nine-item reading list is ready for its combined build.
 - Home's **Continue Reading** and the existing bookmarks list resolve nested
   EPUB paths. Existing position and bookmark keys are unchanged.
 
+## Progress on covers — item 2
+
+Every book cover now has a status badge and progress bar:
+
+- **New**: no valid saved reading position; opening a readable book changes it
+  to **Reading 0%**.
+- **Reading N%**: estimated progress at the saved position. Chapter file sizes
+  weight the whole-book estimate; the current block and its text offset
+  estimate progress within a chapter. It is not an exact word/page count.
+- **Finished 100%**: advance once more after the final page, or tap **Finish
+  book** at the bottom of the final chapter in scrolling mode. Reopening at
+  that position preserves Finished. Moving to an earlier position changes it
+  back to Reading. An estimate alone never marks a book Finished.
+
+Older saved positions display **Reading** without a percentage or bar until
+the book is reopened. Their original resume position is preserved. Folders
+have no reading badge. Status is independent for books in different subfolders,
+even when their filenames are identical.
+
+Progress extends the existing `pos_<path hash>` value as
+`chapter:block:offset|p1:percent:finished`. It adds no config entries and uses
+the existing position-save/flush points. The three-number prefix also remains
+readable by the old reader. Cover badges read only the in-memory config;
+they do not parse chapters, start timers, or read book content from the card.
+
 ## Resource limits
 
 The R1 has 64 MB RAM. Scans run on one background worker, cancel between files,
@@ -41,6 +66,12 @@ leave its lookahead area, and can be requested again on return.
 
 Local checks completed:
 
+- Progress tests: New/Reading/Finished transitions; save/reload; preservation of
+  legacy positions and settings; compatible position prefixes; independent
+  nested and long paths; completion/rewind behavior; malformed extensions and
+  integer bounds; and progress within long paragraphs. Native Windows tests
+  remove the test config before a changed-state flush to accommodate Windows
+  CRT rename semantics; the deployed Linux atomic-save code is unchanged.
 - Scanner tests: title/author/filename search, nested and empty folders, all
   five sorts, case folding, damaged-book fallback, cache hits/invalidation/
   corruption, unavailable cache, invalid paths, cancellation, nested resume
@@ -53,6 +84,10 @@ Local checks completed:
   headers with warnings treated as errors. This is not a linked player or
   firmware build. Local MIPS libc headers were unavailable; the actual
   toolchain/link/size checks remain for the combined build.
+
+The progress module, reader and shelf also compiled individually against the
+Linux headers with warnings treated as errors. No linked player, firmware
+update, release or version change was made for either item.
 
 The POSIX symlink cases are included in the scanner tests for the future Linux
 checks. They were not executed by the native Windows test run. On-device
@@ -69,6 +104,18 @@ gcc -std=c11 -Wall -Wextra -Werror -I. \
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 ./build_tests/test_ebooklibrary "$fixture"
+```
+
+Run progress tests from `sonix-player` on Linux:
+
+```sh
+gcc -std=c11 -Wall -Wextra -Werror -I. \
+  tests/test_ebookprogress.c src/system/ebook/ebookprogress.c \
+  src/system/ebook/bookmarks.c src/system/core/config.c \
+  -o build_tests/test_ebookprogress
+fixture=$(mktemp -d)
+trap 'rm -rf -- "$fixture"' EXIT
+./build_tests/test_ebookprogress "$fixture"
 ```
 
 The existing checks workflow will run this test when it is eventually invoked

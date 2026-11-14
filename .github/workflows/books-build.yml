@@ -75,6 +75,16 @@ jobs:
           fixture=$(mktemp -d)
           trap 'rm -rf -- "$fixture"' EXIT
           ./build_tests/test_ebooklibrary "$fixture"
+      - name: Test saved progress and legacy reading positions
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. \
+            tests/test_ebookprogress.c src/system/ebook/ebookprogress.c \
+            src/system/ebook/bookmarks.c src/system/core/config.c \
+            -o build_tests/test_ebookprogress
+          fixture=$(mktemp -d)
+          trap 'rm -rf -- "$fixture"' EXIT
+          ./build_tests/test_ebookprogress "$fixture"
       - name: Check language resources and fork update destination
         run: python3 sonix-player/tests/check_resources.py
       - name: Test Wi-Fi update policy

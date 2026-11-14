@@ -7,6 +7,7 @@
 #include "src/system/ebook/bookmarks.h"
 #include "src/system/ebook/ebook.h"
 #include "src/system/ebook/ebookhistory.h"
+#include "src/system/ebook/ebookprogress.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookbar.h"
 #include "src/gui/ebook/ebookfonts.h"
@@ -91,6 +92,7 @@ typedef enum {
 static gui_config_t *g_cfg;
 
 static ebook_t *book;
+static ebookprogress_t reader_progress;
 // Two boxes, not one: the slide needs the page it is leaving and the page it is
 // arriving at on screen together. `page_box` is always the one being read;
 // `page_spare` is the other, empty and parked off-screen between turns. In the
@@ -145,6 +147,7 @@ static void show_page(void);
 static void menu_open(void);
 static void update_status(void);
 static void position_save(void);
+static ebookprogress_t progress_now(bool finish);
 static bool load_chapter(uint32_t spine, uint32_t block, uint32_t offset);
 static bool load_chapter_dir(uint32_t spine, uint32_t block, uint32_t offset, int direction);
 static bool load_chapter_at_end(uint32_t spine);
@@ -191,42 +194,20 @@ static void apply_colours(void) {
 // where the reading was left
 // ---------------------------------------------------------------------------
 
-// A book is remembered by its path, and the path is turned into a key short
-// enough to be a config key. Two books with the same hash would share a
-// position, which costs a page of scrolling once in several billion books.
-static void position_key(const char *path, char *out, size_t size) {
-	uint64_t h = 1469598103934665603ull;
-	for (const unsigned char *p = (const unsigned char *)path; *p; p++) {
-		h ^= *p;
-		h *= 1099511628211ull;
-	}
-	snprintf(out, size, "pos_%08x%08x", (unsigned)(h >> 32), (unsigned)(h & 0xFFFFFFFFu));
-}
-
+// Progress extends the existing position value, preserving its three-number
+// prefix and path hash. Saving still flushes once at the existing save points.
 static void position_save(void) {
-	if (!book) {
-		return;
-	}
-	char key[32], value[64];
-	position_key(ebook_path(book), key, sizeof(key));
-	snprintf(value, sizeof(value), "%u:%u:%u", ebook_chapter_index(book), page_block, page_offset);
-	config_store_set(config_ebook_store(), "ebook", key, value);
+	if (!book || !ebook_chapter_loaded(book)) return;
+	reader_progress = progress_now(false);
+	ebookprogress_store(ebook_path(book), &reader_progress);
 	config_store_save(config_ebook_store());
 }
 
 static void position_load(const char *path, uint32_t *spine, uint32_t *block, uint32_t *offset) {
-	*spine = *block = *offset = 0;
-	char key[32];
-	position_key(path, key, sizeof(key));
-	const char *value = config_store_get(config_ebook_store(), "ebook", key, "");
-	if (value && value[0]) {
-		unsigned a = 0, b = 0, c = 0;
-		if (sscanf(value, "%u:%u:%u", &a, &b, &c) == 3) {
-			*spine = a;
-			*block = b;
-			*offset = c;
-		}
-	}
+	ebookprogress_t progress = ebookprogress_get(path);
+	*spine = progress.position.spine;
+	*block = progress.position.block;
+	*offset = progress.position.offset;
 }
 
 // ---------------------------------------------------------------------------
@@ -1329,6 +1310,33 @@ static int book_percent_now(uint32_t chapter, int chapter_percent) {
 	return chapters ? (int)(((uint64_t)chapter * 100u + (uint64_t)chapter_percent) / chapters) : 0;
 }
 
+static int chapter_percent_now(void) {
+	uint64_t length = 0;
+	const ebook_block_t *block = ebook_block(book, page_block);
+	if (block) for (uint32_t i = 0; i < block->span_count; i++) {
+		const ebook_span_t *span = ebook_span(book, block->first_span + i);
+		if (span) length += span->length;
+	}
+	return ebookprogress_chapter_percent(page_block, ebook_block_count(book), page_offset, length);
+}
+
+static ebookprogress_t progress_now(bool finish) {
+	if (!book || !ebook_chapter_loaded(book)) return reader_progress;
+	ebook_position_t position = {ebook_chapter_index(book), page_block, page_offset};
+	int percent = book_percent_now(position.spine, chapter_percent_now());
+	return ebookprogress_advance(reader_progress, position, percent, finish);
+}
+
+static void finish_book(void) {
+	if (!book || !ebook_chapter_loaded(book) ||
+		ebook_chapter_index(book) + 1u != ebook_spine_count(book)) return;
+	if (reader_progress.state == EBOOKPROGRESS_FINISHED) return;
+	reader_progress = progress_now(true);
+	position_save();
+	update_status();
+	toast_plain("Book finished");
+}
+
 // The strip along the bottom. What is on it is the reader's choice; see
 // ebookbar.h.
 static void update_status(void) {
@@ -1336,17 +1344,16 @@ static void update_status(void) {
 		return;
 	}
 
-	uint32_t blocks = ebook_block_count(book);
 	uint32_t chapter = ebook_chapter_index(book);
 
 	ebookbar_state_t state = {
 		.chapter = chapter,
 		.chapters = ebook_spine_count(book),
-		.chapter_percent = blocks ? (int)((uint64_t)page_block * 100u / blocks) : 0,
+		.chapter_percent = chapter_percent_now(),
 		.page = 0,
 		.ink = ink_colour(),
 	};
-	state.book_percent = book_percent_now(chapter, state.chapter_percent);
+	state.book_percent = progress_now(false).percent;
 	// The page of the BOOK, which is what a page number means to a reader: the
 	// pages before this chapter plus the page within it.
 	state.page = page_number > 0 ? pages_before + page_number : 0;
@@ -1407,6 +1414,8 @@ static void chapter_step_cb(lv_event_t *e) {
 		load_chapter(index - 1u, 0, 0);
 	} else if (step > 0 && index + 1u < ebook_spine_count(book)) {
 		load_chapter(index + 1u, 0, 0);
+	} else if (step > 0) {
+		finish_book();
 	}
 }
 
@@ -1457,6 +1466,8 @@ static void render_vertical(void) {
 	}
 	if (ebook_chapter_index(book) + 1u < ebook_spine_count(book)) {
 		chapter_button(page_box, "ebookreader_next_chapter", 1);
+	} else {
+		chapter_button(page_box, "Finish book", 1);
 	}
 
 	apply_colours();
@@ -1687,6 +1698,8 @@ static void page_next(void) {
 		uint32_t next = ebook_chapter_index(book) + 1u;
 		if (next < ebook_spine_count(book)) {
 			load_chapter_dir(next, 0, 0, +1);
+		} else {
+			finish_book();
 		}
 		return;
 	}
@@ -2724,6 +2737,7 @@ void ebookreader_open(const char *path) {
 		return;
 	}
 
+	reader_progress = ebookprogress_get(path);
 	opt_size = (int)config_store_get_int(config_ebook_store(), "ebook", "font_size", 20);
 	opt_line = (int)config_store_get_int(config_ebook_store(), "ebook", "line_space", 4);
 	opt_margin = (int)config_store_get_int(config_ebook_store(), "ebook", "margin", 20);

@@ -8,7 +8,7 @@ Do not poll build status; Noah will report results. Component checks are allowed
 Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 
 1. [x] Library search by title/author, folder browsing, sorting (source and local checks; device validation pending).
-2. [ ] Per-book progress and New/Reading/Finished labels on the shelf.
+2. [x] Per-book progress and New/Reading/Finished labels on the shelf (source and local checks; device validation pending).
 3. [ ] Recently read shelf for multiple books.
 4. [ ] Reading-specific physical-button mapping, including optional volume-key page turns.
 5. [ ] Search inside books and jump to a result.
@@ -21,4 +21,4 @@ Implementation constraints: 64 MB device RAM; bounded background work; keep
 existing reading positions/bookmarks compatible. Distinguish verified tests
 from first-device validation. Do not publish a stable release automatically.
 
-Item 1 usage, limits and validation: [READING_LIBRARY.md](READING_LIBRARY.md).
+Items 1 and 2 usage, limits and validation: [READING_LIBRARY.md](READING_LIBRARY.md).

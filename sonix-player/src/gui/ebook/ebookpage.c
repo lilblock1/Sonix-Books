@@ -9,6 +9,7 @@
 
 #include "src/system/ebook/ebooklibrary.h"
 #include "src/system/ebook/ebookhistory.h"
+#include "src/system/ebook/ebookprogress.h"
 #include "src/system/ebook/bookmarks.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
@@ -236,6 +237,46 @@ static void open_book_cb(lv_event_t *e) {
 	}
 }
 
+static void progress_badge(lv_obj_t *plate, const char *book_path) {
+	ebookprogress_t progress = ebookprogress_get(book_path);
+	lv_obj_t *badge = lv_label_create(plate);
+	if (progress.state == EBOOKPROGRESS_NEW) lv_label_set_text(badge, "New");
+	else if (progress.state == EBOOKPROGRESS_FINISHED) lv_label_set_text(badge, "Finished 100%");
+	else if (progress.known) lv_label_set_text_fmt(badge, "Reading %d%%", progress.percent);
+	else lv_label_set_text(badge, "Reading");
+	lv_obj_set_style_text_font(badge, &font_ui_18, 0);
+	lv_obj_set_style_text_color(badge, lv_color_white(), 0);
+	lv_obj_set_style_bg_color(badge, lv_color_black(), 0);
+	lv_obj_set_style_bg_opa(badge, LV_OPA_80, 0);
+	lv_obj_set_style_pad_hor(badge, 6, 0);
+	lv_obj_set_style_pad_ver(badge, 3, 0);
+	lv_obj_set_style_radius(badge, 5, 0);
+	lv_obj_align(badge, LV_ALIGN_BOTTOM_MID, 0, -18);
+	lv_obj_set_event_bubble(badge, true);
+
+	/* Two small rectangles reuse existing LVGL objects; no bar widget, timer,
+	 * extra images, or chapter parsing is needed by the shelf. */
+	lv_obj_t *track = lv_obj_create(plate);
+	lv_obj_remove_style_all(track);
+	lv_obj_set_size(track, cover_w - 16, 6);
+	lv_obj_align(track, LV_ALIGN_BOTTOM_MID, 0, -7);
+	lv_obj_set_style_bg_color(track, lv_color_black(), 0);
+	lv_obj_set_style_bg_opa(track, LV_OPA_80, 0);
+	lv_obj_set_style_radius(track, 3, 0);
+	lv_obj_set_clickable(track, false);
+	lv_obj_set_scrollable(track, false);
+	lv_obj_t *fill = lv_obj_create(track);
+	lv_obj_remove_style_all(fill);
+	lv_obj_set_size(fill, lv_pct(progress.percent), 6);
+	lv_obj_set_style_bg_color(fill, lv_color_white(), 0);
+	lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
+	lv_obj_set_style_radius(fill, 3, 0);
+	lv_obj_set_clickable(fill, false);
+	lv_obj_set_scrollable(fill, false);
+	/* A legacy position has no measured percentage until the book is opened. */
+	lv_obj_set_hidden(track, !progress.known);
+}
+
 static void build_tiles(void) {
 	int width = (int)g_cfg->screen_width - 2 * g_cfg->padding;
 	cover_w = (width - TILE_GAP) / 2;
@@ -287,6 +328,7 @@ static void build_tiles(void) {
 			lv_obj_center(entry->image);
 			lv_obj_set_hidden(entry->image, true);
 			lv_obj_set_event_bubble(entry->image, true);
+			progress_badge(plate, book->path);
 		}
 		lv_obj_t *label = lv_label_create(tile);
 		lv_obj_set_size(label, cover_w, 42);

@@ -20,4 +20,7 @@ void gearboyplay_init(gui_config_t *cfg);
 // Starts a game and opens the screen. The title comes from the database.
 void gearboyplay_open(const char *rom_path, const char *title);
 
+// UI thread only: play/pause opens the game menu, rather than background music.
+bool gearboyplay_key(gui_key_t key);
+
 #endif /* GUI_GEARBOYPLAY_H */

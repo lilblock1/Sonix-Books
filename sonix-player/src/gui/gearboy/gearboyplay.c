@@ -427,6 +427,23 @@ static void menu_close_and_resume(void) {
 	gearboy_set_paused(false);
 }
 
+bool gearboyplay_key(gui_key_t key) {
+	if (lv_screen_active() != gearboyplay_screen) {
+		return false;
+	}
+	if (key == GUI_KEY_PLAY_PAUSE && !waiting_for_state) {
+		if (menu_layer && !lv_obj_is_hidden(menu_layer)) {
+			if (!menu_still_deaf()) {
+				menu_close_and_resume();
+			}
+		} else {
+			menu_open();
+		}
+	}
+	// Next/previous must not start or switch a music track underneath the game.
+	return true;
+}
+
 
 // How long the badge stays up.
 //

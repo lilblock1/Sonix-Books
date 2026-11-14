@@ -6,6 +6,7 @@
 
 #include "src/system/ebook/bookmarks.h"
 #include "src/system/ebook/ebook.h"
+#include "src/system/ebook/ebookhistory.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookbar.h"
 #include "src/gui/ebook/ebookfonts.h"
@@ -2004,6 +2005,49 @@ static void menu_open(void) {
 	lv_obj_move_foreground(menu_veil);
 }
 
+bool ebookreader_key(gui_key_t key) {
+	if (!book || lv_screen_active() != ebookreader_screen) {
+		return false;
+	}
+	bool menu_visible = menu_veil && !lv_obj_is_hidden(menu_veil);
+	if (key == GUI_KEY_PLAY_PAUSE) {
+		if (menu_visible) {
+			menu_close();
+		} else {
+			menu_open();
+		}
+		return true;
+	}
+	// Never turn a page behind its settings or during a page animation.
+	if (menu_visible || turning) {
+		return true;
+	}
+	if (turn_mode() == TURN_VERTICAL) {
+		int32_t y = lv_obj_get_scroll_y(page_box);
+		int32_t step = lv_obj_get_height(page_box) * 9 / 10;
+		uint32_t chapter = ebook_chapter_index(book);
+		if (key == GUI_KEY_NEXT) {
+			if (lv_obj_get_scroll_bottom(page_box) <= 1 && chapter + 1u < ebook_spine_count(book)) {
+				load_chapter(chapter + 1u, 0, 0);
+			} else {
+				lv_obj_scroll_to_y(page_box, y + step, LV_ANIM_OFF);
+			}
+		} else if (key == GUI_KEY_PREV) {
+			if (y <= 1 && chapter > 0 && load_chapter(chapter - 1u, 0, 0)) {
+				lv_obj_update_layout(page_box);
+				lv_obj_scroll_to_y(page_box, lv_obj_get_scroll_bottom(page_box), LV_ANIM_OFF);
+			} else {
+				lv_obj_scroll_to_y(page_box, y > step ? y - step : 0, LV_ANIM_OFF);
+			}
+		}
+	} else if (key == GUI_KEY_NEXT) {
+		page_next();
+	} else if (key == GUI_KEY_PREV) {
+		page_prev();
+	}
+	return true;
+}
+
 static void menu_veil_cb(lv_event_t *e) {
 	(void)e;
 	menu_close();
@@ -2730,9 +2774,14 @@ void ebookreader_open(const char *path) {
 		spine = 0;
 		block = offset = 0;
 	}
-	if (!load_chapter(spine, block, offset)) {
-		load_chapter(0, 0, 0);
+	if (!load_chapter(spine, block, offset) && !load_chapter(0, 0, 0)) {
+		ebookfonts_close();
+		ebook_close(book);
+		book = NULL;
+		gui_notify_popup("ebookreader_open_failed");
+		return;
 	}
+	ebookhistory_remember(path);
 
 	// A page of a book is looked at for minutes without a finger touching the
 	// glass, which is exactly what the screen timeout is for -- so it is held

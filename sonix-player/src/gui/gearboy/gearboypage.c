@@ -17,6 +17,7 @@
 #include "src/gui/shell/theme.h"
 #include "src/system/gearboy/gbdb.h"
 #include "src/system/core/lang.h"
+#include "src/system/core/config.h"
 
 lv_obj_t *gearboypage_screen;
 
@@ -56,6 +57,10 @@ static void open_rom_cb(lv_event_t *e) {
 
 	int index = (int)(intptr_t)lv_event_get_user_data(e);
 	if (index < 0 || index >= rom_count || !roms) {
+		return;
+	}
+	if (!gui_card_available()) {
+		gui_notify_no_card();
 		return;
 	}
 	gearboyplay_open(roms[index].path, roms[index].name);
@@ -111,6 +116,8 @@ static void pick_view_cb(lv_event_t *e) {
 		return;
 	}
 	show_color = (bool)(uintptr_t)lv_event_get_user_data(e);
+	config_set_bool("gearboy", "library_color", show_color);
+	config_save();
 	refresh_view_buttons();
 	rebuild_rows();
 	lv_obj_scroll_to_y(list_box, 0, LV_ANIM_OFF);
@@ -182,7 +189,10 @@ static void *scan_thread(void *arg) {
 	res->list = list;
 	res->count = count;
 
-	gui_post(scan_done_cb, res);
+	if (!gui_post(scan_done_cb, res)) {
+		free(res->list);
+		free(res);
+	}
 	return NULL;
 }
 
@@ -209,6 +219,12 @@ static void screen_loaded_cb(lv_event_t *e) {
 	(void)e;
 	refresh_view_buttons();
 	lv_obj_scroll_to_y(list_box, 0, LV_ANIM_OFF);
+	if (!gui_card_available()) {
+		lv_obj_clean(list_box);
+		lv_label_set_text(status_label, tr("books_card_unavailable"));
+		lv_obj_set_hidden(status_label, false);
+		return;
+	}
 	// Rescan on every entry: the card may have been removed, reinserted or
 	// filled elsewhere. With a warm cache it costs one directory read.
 	start_scan();
@@ -221,6 +237,7 @@ static void open_settings_cb(lv_event_t *e) {
 }
 
 void gearboypage_init(gui_config_t *cfg) {
+	show_color = config_get_bool("gearboy", "library_color", false);
 	lv_obj_add_style(gearboypage_screen, &theme_style_screen, 0);
 	lv_obj_t *page_title = settingsrow_title(gearboypage_screen, cfg, "gearboy");
 	settingsrow_title_corner_slots(page_title, cfg, 1);

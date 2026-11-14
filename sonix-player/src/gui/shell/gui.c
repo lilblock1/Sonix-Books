@@ -41,6 +41,7 @@
 #include "src/gui/gearboy/gearboyplay.h"
 #include "src/gui/shell/lowbattery.h"
 #include "src/gui/shell/main_menu.h"
+#include "src/gui/shell/gamespage.h"
 #include "src/gui/library/medialist.h"
 #include "src/gui/library/filespage.h"
 #include "src/gui/library/imageview.h"
@@ -503,6 +504,10 @@ static void modal_init(gui_config_t *cfg) {
 
 static void key_async_cb(void *user_data) {
 	gui_key_t key = (gui_key_t)(uintptr_t)user_data;
+	// Transport keys belong to the activity on screen before background music.
+	if (ebookreader_key(key) || gearboyplay_key(key)) {
+		return;
+	}
 
 	// The side keys act on the local transport, and there are states in which
 	// that transport is not what the device is doing. Pressing them then does
@@ -629,6 +634,7 @@ void gui_init(gui_config_t *cfg) {
 	dlna_screen = lv_obj_create(NULL);
 	sonixlink_screen = lv_obj_create(NULL);
 	morepage_screen = lv_obj_create(NULL);
+	gamespage_screen = lv_obj_create(NULL);
 	filespage_screen = lv_obj_create(NULL);
 	textview_screen = lv_obj_create(NULL);
 	imageview_screen = lv_obj_create(NULL);
@@ -682,6 +688,7 @@ void gui_init(gui_config_t *cfg) {
 	gearboysettings_init(cfg); // before the page: its gear opens this
 	gearboypage_init(cfg);
 	flappybird_init(cfg);
+	gamespage_init(cfg);
 	metronomepage_init(cfg);
 	// before morepage: the books tile opens the shelf, and the shelf opens the
 	// reader.
@@ -763,6 +770,7 @@ void gui_init(gui_config_t *cfg) {
 		btsettings_screen, btaudio_screen,	 airpodspage_screen, airplay_screen,   streaming_screen,
 		radiopage_screen,  radiolist_screen, radiosearch_screen,
 		dlna_screen,	   sonixlink_screen,	 morepage_screen,	  gearboypage_screen, metronomepage_screen,
+		gamespage_screen,
 	};
 	for (size_t i = 0; i < sizeof(back_swipe_screens) / sizeof(back_swipe_screens[0]); i++) {
 		switcher_attach_back_gesture(back_swipe_screens[i]);

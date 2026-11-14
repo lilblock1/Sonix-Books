@@ -1,4 +1,23 @@
-﻿# Sonix Player
+# Sonix Books
+
+A reading-first fork of [Sonix Player](https://github.com/Jepl4r/sonix-player) by Jepl4r, developed for the HiBy R1. Books and games are the main activities; music remains available. This fork uses AI-assisted development and retains the upstream GPL-3.0 license and attribution.
+
+**Development version: no tested Sonix Books device firmware has been released yet.** The automated build below produces a Linux simulator, not a flashable `.upt`. Do not rename a simulator artifact to `r1.upt`.
+
+### First development update
+
+- Home: Books, Continue reading, Games, Music, More, Settings.
+- Continue reading reopens the last successfully read EPUB at its saved position. It resolves the book against the current card, handles missing files, and puts the last book first on the shelf.
+- Short Previous/Next presses turn pages or scroll; short Play/Pause opens the reading menu. These follow the existing button mappings. Long-press seeking and volume mappings retain upstream behavior.
+- Games groups Game Boy/Game Boy Color and Flappy Bird. Short Play/Pause opens the Game Boy pause menu. The GB/GBC library tab is remembered.
+- Updates use this fork, including when system-info.json has no repository field.
+
+Copy DRM-free EPUB files to `Ebook/` at the card root. Game Boy ROMs go in `Games/GB/`, and Game Boy Color ROMs in `Games/GBC/`. Existing font, bookmark, theme, and save-state support is inherited from Sonix; this update does not add more ebook formats or emulator systems.
+
+The [development notes](BOOKS_DEVELOPMENT.md) describe validation and the next stages. The remaining documentation describes the inherited player and build process; firmware installation instructions apply only once a matching device image has been built and tested.
+
+---
+
 
 A replacement player for the **HiBy R3 Pro II** and the **HiBy R1**, written on
 LVGL.
@@ -8,7 +27,7 @@ Everything it can do is in **[FEATURES.md](FEATURES.md)**.
 ## Install
 
 1. Download the firmware for your player from the
-   **[latest release](https://github.com/Jepl4r/sonix-player/releases/latest)**:
+   **[latest release](https://github.com/lilblock1/Sonix-Books/releases/latest)**:
    `r3proii.upt` for the R3 Pro II, `r1.upt` for the R1. **Never the other
    one**: the update does not check which player it is given.
 2. Charge the player **above 30%**.

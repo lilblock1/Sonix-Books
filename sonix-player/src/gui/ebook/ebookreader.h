@@ -18,4 +18,7 @@ void ebookreader_open(const char *path);
 // was left: what the bookmarks page opens a book with.
 void ebookreader_open_at(const char *path, uint32_t spine, uint32_t block, uint32_t offset);
 
+// UI thread only. Consumes transport keys while a book is on screen.
+bool ebookreader_key(gui_key_t key);
+
 #endif /* EBOOKREADER_H */

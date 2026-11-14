@@ -1,0 +1,66 @@
+name: Sonix Books checks
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git pkg-config libsdl2-dev libfreetype-dev libopusfile-dev libwavpack-dev libasound2-dev
+      - name: Test persistent reading history
+        working-directory: sonix-player
+        run: |
+          mkdir -p build_tests
+          gcc -std=c11 -Wall -Wextra -Werror -I. \
+            tests/test_ebookhistory.c src/system/ebook/ebookhistory.c \
+            src/system/ebook/bookmarks.c src/system/core/config.c \
+            -o build_tests/test_ebookhistory
+          ./build_tests/test_ebookhistory
+      - name: Check language resources and fork update destination
+        run: python3 sonix-player/tests/check_resources.py
+      - name: Build the complete Linux simulator
+        working-directory: sonix-player
+        run: make host -j2
+      - name: Stage R1 simulator resources
+        run: |
+          cp -a sonix-packer/assets/R1/usr sonix-player/usr
+          mkdir -p sonix-player/simulator-card/Ebook sonix-player/simulator-card/Games/GB sonix-player/simulator-card/Games/GBC
+      - name: Smoke test simulator startup
+        working-directory: sonix-player
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          SDL_RENDER_DRIVER: software
+          SONIX_NO_MOUNT: '1'
+          SONIX_NO_SYSSERVER: '1'
+          SONIX_SD_ROOT: simulator-card
+          SONIX_CONFIG: simulator-card/device_config.ini
+          SONIX_EBOOK_CONFIG: simulator-card/ebook_config.ini
+        run: |
+          set +e
+          timeout --signal=TERM 10s ./sonix_player_host > simulator-startup.log 2>&1
+          result=$?
+          set -e
+          cat simulator-startup.log
+          test "$result" -eq 124
+      - name: Upload Linux simulator (not firmware)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonix-books-linux-simulator
+          path: |
+            sonix-player/sonix_player_host
+            sonix-player/usr/resource
+            sonix-player/simulator-startup.log
+          retention-days: 14

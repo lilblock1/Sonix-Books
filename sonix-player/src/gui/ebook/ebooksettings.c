@@ -214,6 +214,12 @@ void ebooksettings_init(gui_config_t *cfg) {
 		}
 		settingsrow_toggle(option_list, ebookbar_option_tag((ebookbar_option_t)i), &switches[i], option_cb);
 	}
+	lv_obj_t *controls_note = lv_label_create(option_list);
+	lv_label_set_long_mode(controls_note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(controls_note, lv_pct(100));
+	lv_obj_add_style(controls_note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(controls_note, &font_ui_18, 0);
+	lv_label_set_text(controls_note, tr("books_reader_controls"));
 
 	relayout();
 

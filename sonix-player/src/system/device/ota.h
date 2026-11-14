@@ -49,7 +49,7 @@ typedef struct {
 	const char *notes;	// the release description, Markdown as written, cut at OTA_NOTES_MAX; never NULL
 	long size;			// bytes
 	char url[512];		// browser_download_url of the asset
-	char sha256[65];	// from the asset's "digest", "" when GitHub gives none
+	char sha256[65];	// required: releases without GitHub's asset digest are refused
 } ota_release_t;
 
 // Starts looking for a release. False when a check or a download is already

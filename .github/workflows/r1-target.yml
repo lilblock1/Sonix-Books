@@ -26,7 +26,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential git pkg-config wget texinfo bison flex \
             autoconf automake libtool libtool-bin libgmp-dev libmpfr-dev libmpc-dev \
-            xz-utils bzip2 patch python3
+            xz-utils bzip2 patch python3 p7zip-full squashfs-tools genisoimage binutils
       - name: Cache upstream cross toolchain and static libraries
         uses: actions/cache@v4
         with:
@@ -55,3 +55,29 @@ jobs:
             sonix-player/target-elf.txt
             sonix-player/target-SHA256SUMS
           retention-days: 30
+      - name: Download and pin the known Sonix R1 base
+        run: |
+          curl --fail --location --retry 3 --max-time 180 \
+            https://github.com/Jepl4r/sonix-player/releases/download/1.3.0/r1.upt \
+            --output r1-base.upt
+          echo '7617a76b212044ea0a3b533eb74cd3d04c28100cc3a08fd058834ef8ba6c4588  r1-base.upt' | sha256sum --check
+      - name: Build and independently re-read the R1 candidate
+        run: |
+          sudo python3 sonix-player/tools/r1_candidate.py --base r1-base.upt \
+            --player sonix-player/sonix_player --output r1-candidate
+      - name: Upload R1 candidate and audit report (not a stable release)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonix-books-r1-candidate
+          path: r1-candidate/
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Upload toolchain diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r1-toolchain-diagnostics
+          path: sonix-player/tmp/rbdev-build/*.log
+          if-no-files-found: ignore
+          retention-days: 7

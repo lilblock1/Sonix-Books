@@ -1,0 +1,76 @@
+name: Publish tested R1 Wi-Fi update
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful R1 device binary workflow run ID
+        required: true
+        type: string
+      tag:
+        description: Version tag matching the candidate, for example v0.1.0
+        required: true
+        type: string
+      tested_image_sha256:
+        description: SHA-256 of the exact r1.upt tested on the R1
+        required: true
+        type: string
+      r1_hardware_tested:
+        description: This exact image booted and passed the R1 device checklist
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    if: inputs.r1_hardware_tested
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sonix-books-r1-candidate
+          path: candidate
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+      - name: Verify build provenance and exact tested image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+          TAG: ${{ inputs.tag }}
+          TESTED_SHA: ${{ inputs.tested_image_sha256 }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > candidate/run.json
+          python3 - <<'PY'
+          import hashlib, json, os, re
+          from pathlib import Path
+          run = json.loads(Path('candidate/run.json').read_text())
+          report = json.loads(Path('candidate/r1-build-report.json').read_text())
+          assert run['conclusion'] == 'success' and run['event'] == 'push'
+          assert run['name'] == 'R1 device binary' and run['head_branch'] == 'main'
+          assert run['head_repository']['full_name'] == os.environ['GITHUB_REPOSITORY']
+          assert re.fullmatch(r'v?\d+\.\d+\.\d+', os.environ['TAG'])
+          assert os.environ['TAG'].lstrip('v') == report['version']
+          assert report['device'] == 'HiBy R1' and report['structural_checks_passed']
+          actual = hashlib.sha256(Path('candidate/r1.upt').read_bytes()).hexdigest()
+          assert actual == report['image_sha256'] == os.environ['TESTED_SHA'].lower()
+          assert report['kernel_content_unchanged']
+          assert report['rootfs_bytes'] <= report['base_rootfs_bytes']
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              out.write('SOURCE_SHA=' + run['head_sha'] + '\n')
+          PY
+      - name: Publish the tested firmware for the on-device updater
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          printf '%s\n' 'Sonix Books for HiBy R1.' \
+            '' 'Published through the tested-image workflow. The release assets contain the firmware checksum and build audit.' \
+            '' 'On Sonix Books: Settings > System > Update firmware > Via internet. Charge to at least 50% first.' \
+            '' 'A checksum verifies download integrity; it does not eliminate flashing or hardware risks.' > release-notes.md
+          gh release create "$TAG" candidate/r1.upt candidate/SHA256SUMS candidate/r1-build-report.json \
+            --target "$SOURCE_SHA" --title "Sonix Books $TAG (HiBy R1)" --notes-file release-notes.md

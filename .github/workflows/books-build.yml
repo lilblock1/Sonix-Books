@@ -30,6 +30,14 @@ jobs:
           ./build_tests/test_ebookhistory
       - name: Check language resources and fork update destination
         run: python3 sonix-player/tests/check_resources.py
+      - name: Test Wi-Fi update policy
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. tests/test_ota_policy.c \
+            src/system/device/ota_policy.c -o build_tests/test_ota_policy
+          ./build_tests/test_ota_policy
+      - name: Test firmware chunk verification
+        run: python3 sonix-player/tests/test_r1_candidate.py
       - name: Build the complete Linux simulator
         working-directory: sonix-player
         run: make host -j2

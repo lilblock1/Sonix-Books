@@ -14,6 +14,7 @@
 #include "src/system/core/sha256.h"
 #include "src/system/core/utils.h"
 #include "src/system/device/firmware.h"
+#include "src/system/device/ota_policy.h"
 #include "src/system/device/sysinfo.h"
 #include "src/system/device/system.h"
 #include "src/system/net/http.h"
@@ -283,12 +284,13 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 
 	// "sha256:<64 hex>" on assets uploaded since mid-2025.
 	char digest[80];
-	if (json_obj_str(doc, best_asset, "digest", digest, sizeof(digest)) && strncmp(digest, "sha256:", 7) == 0 &&
-		strlen(digest + 7) == 64) {
-		snprintf(release.sha256, sizeof(release.sha256), "%s", digest + 7);
+	if (!json_obj_str(doc, best_asset, "digest", digest, sizeof(digest)) || !ota_policy_digest(digest)) {
+		printf("ota: release has no valid GitHub SHA-256 digest; refusing it\n");
+		return OTA_CHECK_FAILED;
 	}
+	snprintf(release.sha256, sizeof(release.sha256), "%s", digest + 7);
 
-	if (release.size <= 0 || strncmp(release.url, "https://", 8) != 0) {
+	if (!ota_policy_asset(repo, stem, release.url, release.size)) {
 		return OTA_CHECK_FAILED;
 	}
 	release_valid = true;
@@ -389,6 +391,13 @@ static void remove_old_files(const char *root) {
 }
 
 static ota_result_t do_download(void) {
+	// Check again at the boundary that writes the card, not only while parsing
+	// the release list. A missing digest must never take the old size-only path.
+	char digest[80];
+	snprintf(digest, sizeof(digest), "sha256:%s", release.sha256);
+	if (!ota_policy_digest(digest) || !ota_policy_asset(repo, stem, release.url, release.size)) {
+		return OTA_CHECK_FAILED;
+	}
 	const char *root = storage_sd_root();
 	if (!root || !*root) {
 		return OTA_NO_CARD;
@@ -476,7 +485,7 @@ static ota_result_t do_download(void) {
 	if (stop) {
 		r = OTA_CANCELLED;
 	}
-	if (r == OTA_OK && release.sha256[0]) {
+	if (r == OTA_OK) {
 		char hex[SHA256_HEX_LEN];
 		sha256_final_hex(&sha, hex);
 		if (strcasecmp(hex, release.sha256) != 0) {

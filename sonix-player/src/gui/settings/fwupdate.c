@@ -11,8 +11,10 @@
 #include "src/system/core/lang.h"
 #include "src/system/device/firmware.h"
 #include "src/system/device/ota.h"
+#include "src/system/device/ota_policy.h"
 #include "src/system/device/power.h"
 #include "src/system/device/sysinfo.h"
+#include "src/system/device/system.h"
 
 #define CARD_W 420
 #define BUTTON_H 64
@@ -21,7 +23,7 @@
 
 // The title while a release is shown, downloaded and installed; the version
 // is in the line under it.
-#define PRODUCT_NAME "Sonix Player"
+#define PRODUCT_NAME "Sonix Books"
 
 // The notes scroll inside the card past this share of the screen height.
 #define NOTES_MAX_PERCENT 40
@@ -543,12 +545,22 @@ static void show_release(void) {
 
 static void install_cb(lv_timer_t *timer) {
 	(void)timer;
+	sync_battery_from_sysfs();
+	if (!ota_policy_battery(read_battery_percent())) {
+		show_notice(tr("system_battery_warning"));
+		return;
+	}
 	firmware_update_start();
 	// Returns only on the host build.
 	close_card();
 }
 
 static void show_installing(void) {
+	sync_battery_from_sysfs();
+	if (!ota_policy_battery(read_battery_percent())) {
+		show_notice(tr("system_battery_warning"));
+		return;
+	}
 	layout(PRODUCT_NAME, tr("system_update_installing"), false, false);
 	hide_buttons(0);
 	lv_timer_t *t = lv_timer_create(install_cb, INSTALL_DELAY_MS, NULL);
@@ -639,6 +651,11 @@ static void online_clicked(void) {
 // fades out, and a card left over it would be the last thing drawn.
 static void sd_run(void *unused) {
 	(void)unused;
+	sync_battery_from_sysfs();
+	if (!ota_policy_battery(read_battery_percent())) {
+		gui_notify_popup("system_battery_warning");
+		return;
+	}
 	char path[512];
 	if (!firmware_update_file_find(path, sizeof(path))) {
 		gui_notify_popup("system_update_file_missing");

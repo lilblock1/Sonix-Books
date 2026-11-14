@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
 
 BASE_SHA256 = "7617a76b212044ea0a3b533eb74cd3d04c28100cc3a08fd058834ef8ba6c4588"
@@ -96,14 +97,15 @@ def snapshot(root):
     for folder, dirs, files in os.walk(root, followlinks=False):
         for name in dirs + files:
             path = Path(folder) / name
-            mode = path.lstat().st_mode
+            metadata = path.lstat()
+            mode = metadata.st_mode
             if path.is_symlink():
                 value = ("link", os.readlink(path), stat.S_IMODE(mode))
             elif path.is_file():
                 value = ("file", digest(path.read_bytes()), stat.S_IMODE(mode))
             else:
-                value = ("other", stat.S_IFMT(mode), stat.S_IMODE(mode))
-            result[path.relative_to(root).as_posix()] = value
+                value = ("other", stat.S_IFMT(mode), stat.S_IMODE(mode), metadata.st_rdev)
+            result[path.relative_to(root).as_posix()] = value + (metadata.st_uid, metadata.st_gid)
     return result
 
 
@@ -141,30 +143,37 @@ def build(base, player, repository, output):
         shutil.copyfile(player, binary)
         binary.chmod(0o755)
         resources = repository / "sonix-packer/assets/R1/usr/resource/sonix"
+        language_dir = root / "usr/resource/sonix/language"
+        existing_languages = {unicodedata.normalize("NFC", p.name): p for p in language_dir.glob("*.ini")}
+        language_changes = set()
         for language in (resources / "language").glob("*.ini"):
-            target = root / "usr/resource/sonix/language" / language.name
-            require(target.is_file(), "Unexpected new language file")
+            # Firmware built on macOS may use decomposed Unicode filenames.
+            # Keep their original spelling so saved language choices survive.
+            target = existing_languages.get(unicodedata.normalize("NFC", language.name), language_dir / language.name)
             shutil.copyfile(language, target)
+            language_changes.add(target.relative_to(root).as_posix())
         new_info = json.loads((resources / "components/system-info.json").read_text())
         require(new_info.get("device-name") == "HiBy R1", "Fork resources name another device")
         new_info["build_version"] = datetime.now(timezone.utc).strftime("%d%m%Y%H%M")
         (root / INFO).write_text(json.dumps(new_info, indent=4) + "\n")
         after = snapshot(root)
         changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
-        allowed = {"usr/bin/sonix_player", INFO} | {
-            "usr/resource/sonix/language/" + p.name for p in (resources / "language").glob("*.ini")}
+        allowed = {"usr/bin/sonix_player", INFO} | language_changes
         require(set(changed) <= allowed, "An unexpected system file changed")
         # No kernel, module, boot script, system-library or flash-layout overlay.
         new_rootfs = work / "new.squashfs"
         run("mksquashfs", root, new_rootfs, "-comp", "lzo", "-b", "131072", "-all-root", "-noappend", "-no-progress")
         data = new_rootfs.read_bytes()
+        rechecked_root = work / "rechecked-root"
+        run("unsquashfs", "-no-progress", "-d", rechecked_root, new_rootfs)
+        require(snapshot(rechecked_root) == after, "Repacked filesystem content or permissions changed")
         report.update(version=new_info["OS_version"], changed_files=changed,
                       kernel_sha256=digest(images["xImage"]), kernel_content_unchanged=True,
                       base_rootfs_bytes=len(images["rootfs.squashfs"]), rootfs_bytes=len(data),
                       rootfs_limit_policy="not larger than the pinned base image")
         (output / "r1-build-report.json").write_text(json.dumps(report, indent=2) + "\n")
         require(len(data) <= len(images["rootfs.squashfs"]),
-                "Candidate exceeds the known-working base size. Device partition proof is required before raising this limit.")
+                f"Candidate rootfs {len(data)} exceeds known base {len(images['rootfs.squashfs'])}. Device partition proof is required before raising this limit.")
         for file in ota.glob("rootfs.squashfs.*"):
             file.unlink()
         for file in ota.glob("ota_md5_rootfs.squashfs.*"):

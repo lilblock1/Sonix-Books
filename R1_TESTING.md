@@ -20,6 +20,11 @@ It refuses a root filesystem larger than the known-working base image rather
 than guessing the size of the device partition. It reopens the final `.upt`
 and verifies its chunks and kernel again.
 
+The target build uses `-Os` for UI/control code to reduce the flash footprint.
+The existing audio, decoder, emulator and software-rendering hot paths retain
+`-O3`. Host simulator flags are unchanged; check real-device responsiveness as
+part of the acceptance checklist.
+
 **Preserving kernel bytes does not mean the kernel partition is never written.**
 The standard update manifest still carries the original kernel; the updater
 can rewrite it. A power interruption is therefore still a risk.

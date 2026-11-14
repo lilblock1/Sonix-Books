@@ -104,17 +104,16 @@ TARGET_CFLAGS = $(CFLAGS) -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -
 #
 # -O3 inlines and unrolls, and the code grows with it: worth it where the
 # player spends its time with music playing or a game running, and nowhere
-# else. Locked into RAM as all the code is (see above), the rest at -O2 is
-# about half a megabyte given back, and on a core with a small instruction
-# cache, smaller code is seldom slower code.
+# else. Use -Os for the remaining UI and control code so the firmware fits
+# within the known-working R1 image size without removing system files or
+# increasing the accepted flash footprint. It also reduces locked code pages.
 #
 # The hot paths: the audio chain and its effects, the decoders, the Game Boy
-# core, and LVGL's software renderer and colour mixing. SQLite is at -O2, the
-# level it is normally built at.
+# core, and LVGL's software renderer and colour mixing keep -O3.
 #
 # TARGET_OPT is per object: the default level everywhere, the hot one on the
 # objects matching TARGET_HOT_PATTERNS.
-TARGET_DEFAULT_OPT = -O2
+TARGET_DEFAULT_OPT = -Os
 TARGET_HOT_OPT = -O3
 TARGET_HOT_PATTERNS = build_target/system/audio/% build_target/system/decode/% build_target/gb/% \
 					  build_target/lvgl/src/draw/sw/% build_target/lvgl/src/misc/lv_color%

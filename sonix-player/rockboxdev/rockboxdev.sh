@@ -428,6 +428,14 @@ build_hiby_toolchain() {
     buildtool "alsa-lib" "$alsalib_ver" \
         "--host=$target --disable-python" "" "install DESTDIR=$sysroot"
 
+    # Sonix Player links ALSA, libc and its C++ runtime from this sysroot.
+    # Its Bluetooth IPC uses dbuslite, not GLib/libdbus headers or libraries.
+    # Keep the full SDK as the default for other users of rockboxdev.
+    if [ "${RBDEV_PLAYER_ONLY:-0}" = "1" ]; then
+        echo "ROCKBOXDEV: player toolchain complete (GCC, glibc and ALSA)."
+        return
+    fi
+
     # 7. libffi
     getfile_ex "libffi-$libffi_ver.tar.gz" "libffi-$libffi_ver.tar.gz" \
         "https://sourceware.org/pub/libffi"

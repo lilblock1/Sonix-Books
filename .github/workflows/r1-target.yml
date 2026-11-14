@@ -27,15 +27,28 @@ jobs:
           sudo apt-get install -y build-essential git pkg-config wget texinfo bison flex \
             autoconf automake libtool libtool-bin libgmp-dev libmpfr-dev libmpc-dev \
             xz-utils bzip2 patch python3 p7zip-full squashfs-tools genisoimage binutils
-      - name: Cache upstream cross toolchain and static libraries
-        uses: actions/cache@v4
+      - name: Restore the player cross toolchain
+        id: toolchain
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            sonix-player/rockbox-toolchain
-            sonix-player/freetype-target
-            sonix-player/audio-target
-            sonix-player/*.tar.*
-          key: r1-toolchain-ubuntu24-${{ hashFiles('sonix-player/rockboxdev/**', 'sonix-player/Makefile') }}
+          path: sonix-player/rockbox-toolchain
+          key: r1-player-toolchain-ubuntu24-${{ hashFiles('sonix-player/rockboxdev/**') }}
+      - name: Build only the toolchain dependencies the player uses
+        working-directory: sonix-player
+        env:
+          RBDEV_PLAYER_ONLY: '1'
+        run: |
+          if [ ! -x rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-g++ ] || \
+             [ ! -f rockbox-toolchain/mipsel-rockbox-linux-gnu/sysroot/usr/include/alsa/asoundlib.h ]; then
+            chmod +x rockboxdev/rockboxdev.sh
+            ./rockboxdev/rockboxdev.sh
+          fi
+      - name: Save the completed compiler before application or packaging steps
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sonix-player/rockbox-toolchain
+          key: ${{ steps.toolchain.outputs.cache-primary-key }}
       - name: Build MIPS player and enforce device glibc compatibility
         working-directory: sonix-player
         run: |

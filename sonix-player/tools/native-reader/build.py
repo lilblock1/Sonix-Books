@@ -71,7 +71,11 @@ def main():
         # Link feature probes with the target compiler. Static-only probes can
         # incorrectly report missing libc functions and host libraries present.
         (archive_build / "CMakeCache.txt").unlink(missing_ok=True)
-        cmake += ["-DCMAKE_SYSTEM_NAME=Linux", "-DCMAKE_SYSTEM_PROCESSOR=mipsel",
+        # The cross sysroot is newer than the R1 runtime. In particular
+        # explicit_bzero was detected by the failed build but was introduced
+        # in glibc 2.25. Use libarchive's own portable secure-zero fallback.
+        cmake += ["-DHAVE_EXPLICIT_BZERO=OFF",
+                  "-DCMAKE_SYSTEM_NAME=Linux", "-DCMAKE_SYSTEM_PROCESSOR=mipsel",
                   "-DCMAKE_FIND_ROOT_PATH=" + str(prefix) + ";" + str(ROOT / "rockbox-toolchain/mipsel-rockbox-linux-gnu/sysroot"),
                   "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY", "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY",
                   "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY"]
@@ -157,9 +161,15 @@ def main():
             report = subprocess.check_output([str(compiler) + "readelf", "-h", "-l", "-V", str(binary)], text=True)
             if "MIPS" not in report or "little endian" not in report:
                 raise ValueError("not a little-endian MIPS reader: " + binary.name)
-            for version in re.findall(r"GLIBC_(\d+)\.(\d+)", report):
-                if tuple(map(int, version)) > (2, 19):
-                    raise ValueError("reader requires newer glibc: " + ".".join(version))
+            newer = sorted({tuple(map(int, v)) for v in re.findall(r"GLIBC_(\d+)\.(\d+)", report) if tuple(map(int, v)) > (2, 19)})
+            if newer:
+                # Print the actual undefined imports, not just the version,
+                # so an incompatible dependency can be traced to its source.
+                symbols = subprocess.check_output([str(compiler) + "readelf", "--dyn-syms", "--wide", str(binary)], text=True)
+                for line in symbols.splitlines():
+                    if " UND " in line and any("@GLIBC_%d.%d" % v in line for v in newer):
+                        print(binary.name + ": " + line.strip(), flush=True)
+                raise ValueError(binary.name + " requires newer glibc: " + ", ".join("%d.%d" % v for v in newer))
             reports.append(binary.name + "\n" + report)
         (tools / "native-reader-elf.txt").write_text("\n".join(reports))
     package = output / ("Sonix-Books-Native-Readers-" + args.target + ".zip")

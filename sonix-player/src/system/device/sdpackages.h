@@ -29,6 +29,9 @@ bool sdpackages_active(const char *root, char version[SDPACKAGES_VERSION]);
 bool sdpackages_generation(const char *root, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]);
 bool sdpackages_path(const char *root, const char *folder, char *out, size_t size);
 bool sdpackages_valid_version(const char *version);
+#define SD_GAME_ID_MAX 32
+bool sdpackages_game_id(const char *id);
+bool sdpackages_game_generation(const char *root, const char *id, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]);
 
 // Worker thread only. Downloaded archives must match the trusted release asset
 // SHA-256. Extract/verify in a fresh managed directory before the active pointer
@@ -37,6 +40,9 @@ sdpackages_result_t sdpackages_install(const char *root, const char *archive,
 	const char *version, const char *sha256, sdpackages_cancel_t cancel,
 	sdpackages_progress_t progress, void *user);
 sdpackages_result_t sdpackages_install_extra(const char *root, unsigned category, const char *archive,
+	const char *version, const char *sha256, sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user);
+
+sdpackages_result_t sdpackages_install_game(const char *root, const char *id, const char *archive,
 	const char *version, const char *sha256, sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user);
 
 #endif

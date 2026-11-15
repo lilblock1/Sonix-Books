@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "version": "v1.0.0",
+  "heading": "Sonix Game Store",
+  "subtitle": "Discover games and emulators",
+  "layout": "list",
+  "palette": "ocean",
+  "radius": 16,
+  "padding": 10,
+  "gap": 8,
+  "logo_size": 76,
+  "emulators_first": false,
+  "show_descriptions": false
+}

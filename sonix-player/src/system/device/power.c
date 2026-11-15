@@ -747,15 +747,8 @@ void power_set_offline_reading(bool active) {
 	if (g_offline_reading == active) return;
 	g_offline_reading = active;
 	g_wifi_idle_since = lv_tick_get();
-	// Restore only a radio that was parked for this reading session. Leave
-	// the normal dark-screen standby behavior in charge otherwise.
-	if (!active && g_reader_wifi_parked && g_screen_on) {
-		g_reader_wifi_parked = false;
-		if (g_wifi_parked) {
-			g_wifi_parked = false;
-			if (config_get_int("wireless", "wifi", 0)) wifi_set_enabled_transient(true);
-		}
-	}
+	// Restoration runs on the power tick after any in-flight radio job
+	// completes; never queue power-on over an unfinished power-off.
 }
 
 static void park_radios_if_idle(uint32_t now) {
@@ -777,7 +770,9 @@ static void park_radios_if_idle(uint32_t now) {
 			g_wifi_parked = false;
 			g_wifi_idle_since = now;
 		}
-		if (g_reader_wifi_parked && (!reader_idle || wifi_wanted())) {
+		// wifi_wanted() includes our own power-off job. Wait until that
+		// job finishes, otherwise that job would immediately undo the park.
+		if (g_reader_wifi_parked && !wifi_busy() && (!reader_idle || wifi_wanted())) {
 			g_reader_wifi_parked = false;
 			g_wifi_parked = false;
 			g_wifi_idle_since = now;

@@ -132,6 +132,13 @@ static bool g_adaptive_refresh = true;
 static bool g_reading_dim_enabled;
 static bool g_instant_reading_turns;
 static bool g_reading_dimmed;
+static power_profile_t g_selected_profile = POWER_CUSTOM, g_effective_profile = POWER_CUSTOM;
+static bool g_auto_saver;
+static uint32_t g_screen_session_start, g_screen_session_total;
+static uint32_t g_battery_sample_at, g_drain_start;
+static int g_drain_start_percent = -1, g_battery_percent = -1;
+static unsigned g_drain_tenths, g_estimated_minutes;
+static bool g_drain_known;
 static uint32_t g_fast_refresh_ms = 16;
 #define READER_IDLE_REFRESH_MS 100u
 #define HOME_IDLE_REFRESH_MS 67u
@@ -758,6 +765,63 @@ static uint32_t g_bt_idle_since;
 static bool g_offline_reading;
 static bool g_reader_wifi_parked;
 
+static power_preset_t current_preset(void) {
+	return power_preset(g_effective_profile, g_adaptive_refresh, g_reading_dim_enabled, g_instant_reading_turns);
+}
+
+void power_set_profile(power_profile_t selected, bool auto_saver) {
+	g_selected_profile = power_profile_valid(selected);
+	g_auto_saver = auto_saver;
+	g_effective_profile = power_profile_effective(g_selected_profile, g_auto_saver,
+		usb_vbus_present() || read_battery_charging(), g_battery_percent, false);
+	g_wifi_idle_since = lv_tick_get();
+}
+
+power_profile_t power_get_effective_profile(void) { return g_effective_profile; }
+
+static void sample_battery_policy(void) {
+	uint32_t now = boottime_ms();
+	if (g_battery_sample_at && now - g_battery_sample_at < 15000u) return;
+	g_battery_sample_at = now;
+	const char *s = read_battery_percent();
+	char *end;
+	long level = s ? strtol(s, &end, 10) : -1;
+	g_battery_percent = s && end != s && !*end && level >= 0 && level <= 100 ? (int)level : -1;
+	bool plugged = usb_vbus_present() || read_battery_charging();
+	power_profile_t old = g_effective_profile;
+	g_effective_profile = power_profile_effective(g_selected_profile, g_auto_saver, plugged,
+		g_battery_percent, old == POWER_SAVER && g_selected_profile != POWER_SAVER);
+	if (old != g_effective_profile) g_wifi_idle_since = lv_tick_get();
+	if (plugged || g_battery_percent < 0 || g_drain_start_percent < g_battery_percent ||
+		g_drain_start_percent < 0 || now - g_drain_start > 6u * 3600000u) {
+		g_drain_start = now;
+		g_drain_start_percent = plugged ? -1 : g_battery_percent;
+		g_drain_known = false;
+		return;
+	}
+	unsigned elapsed = now - g_drain_start;
+	int drop = g_drain_start_percent - g_battery_percent;
+	if (elapsed >= 600000u && drop >= 2) {
+		g_drain_tenths = (unsigned)((unsigned long long)drop * 36000000u / elapsed);
+		g_estimated_minutes = (unsigned)((unsigned long long)g_battery_percent * elapsed / ((unsigned long long)drop * 60000u));
+		g_drain_known = g_drain_tenths > 0;
+	}
+}
+
+void power_get_diagnostics(power_diagnostics_t *out) {
+	if (!out) return;
+	bool plugged = usb_vbus_present() || read_battery_charging();
+	*out = (power_diagnostics_t){
+		.percent = g_battery_percent, .millivolts = read_battery_millivolts(),
+		.charging = read_battery_charging(), .plugged = plugged,
+		.wifi_on = wifi_get_enabled(), .bluetooth_on = bluetooth_get_enabled(),
+		.parked = power_radios_parked(),
+		.screen_on_seconds = (g_screen_session_total + (g_screen_on && g_disp ? boottime_ms() - g_screen_session_start : 0u)) / 1000u,
+		.drain_tenths_per_hour = g_drain_tenths, .estimated_minutes = g_estimated_minutes,
+		.drain_known = g_drain_known && !plugged && g_battery_percent >= 0
+	};
+}
+
 void power_set_offline_reading(bool active) {
 	if (g_offline_reading == active) return;
 	g_offline_reading = active;
@@ -776,7 +840,9 @@ static void park_radios_if_idle(uint32_t now) {
 	}
 	// Never touch the shared Wi-Fi/BT chip while Bluetooth is enabled
 	// during a visible reading session, even if it has no connected peer.
-	bool reader_idle = g_screen_on && g_offline_reading && !bluetooth_get_enabled() && !bluetooth_busy();
+	power_preset_t preset = current_preset();
+	bool reader_idle = g_screen_on && g_offline_reading && preset.reader_wifi_seconds &&
+		!quickpanel_is_open() && !gui_modal_visible() && !bluetooth_get_enabled() && !bluetooth_busy();
 	if ((g_screen_on && !reader_idle) || wifi_wanted()) {
 		g_wifi_idle_since = now;
 	}
@@ -797,7 +863,7 @@ static void park_radios_if_idle(uint32_t now) {
 			return;
 		}
 		if (reader_idle && !g_wifi_parked && wifi_get_enabled() &&
-			since(g_wifi_idle_since, now) >= g_radio_park_after_ms) {
+			!wifi_wanted() && since(g_wifi_idle_since, now) >= preset.reader_wifi_seconds * 1000u) {
 			g_reader_wifi_parked = true;
 			park_wifi_now();
 		}
@@ -1552,10 +1618,10 @@ void power_set_display_options(bool adaptive, bool reading_dim, bool instant_tur
 	g_adaptive_refresh = adaptive;
 	g_reading_dim_enabled = reading_dim;
 	g_instant_reading_turns = instant_turns;
-	if (!reading_dim && g_disp) reader_dim_set(false);
+	if (!current_preset().dim && g_disp) reader_dim_set(false);
 }
 
-bool power_instant_reading_turns(void) { return g_instant_reading_turns; }
+bool power_instant_reading_turns(void) { return current_preset().instant; }
 
 bool power_update_display_policy(void) {
 	// Only notify the waveform worker on changes, not each UI iteration.
@@ -1569,6 +1635,7 @@ bool power_update_display_policy(void) {
 	lv_obj_t *screen = lv_screen_active();
 	bool reading = g_offline_reading && screen && screen == ebookreader_screen;
 	bool home = screen && screen == main_menu_screen;
+	power_preset_t preset = current_preset();
 	uint32_t period = g_fast_refresh_ms;
 	bool dim = false;
 	if (reading || home) {
@@ -1576,11 +1643,11 @@ bool power_update_display_policy(void) {
 		bool quiet = !player_sheet_is_open() && !player_sheet_drag_active() &&
 					 !quickpanel_is_open() && !switcher_back_drag_active() && !gui_modal_visible() &&
 					 !gearboy_running() && !lv_anim_count_running();
-		if (quiet && idle >= DISPLAY_IDLE_AFTER_MS && g_adaptive_refresh) {
-			period = reading ? READER_IDLE_REFRESH_MS : HOME_IDLE_REFRESH_MS;
+		if (quiet && idle >= DISPLAY_IDLE_AFTER_MS && preset.adaptive) {
+			period = reading ? preset.reader_ms : preset.home_ms;
 			if (period < g_fast_refresh_ms) period = g_fast_refresh_ms;
 		}
-		dim = reading && quiet && g_reading_dim_enabled && idle >= READER_DIM_AFTER_MS;
+		dim = reading && quiet && preset.dim && idle >= preset.dim_seconds * 1000u;
 	}
 	reader_dim_set(dim);
 	uint32_t old = g_refr_timer->period;
@@ -1599,6 +1666,7 @@ void power_screen_off(void) {
 	if (!g_screen_on) {
 		return;
 	}
+	g_screen_session_total += boottime_ms() - g_screen_session_start;
 	g_screen_on = false;
 	g_reading_dimmed = false;
 	g_screen_off_at = lv_tick_get();
@@ -1697,6 +1765,7 @@ void power_screen_on(void) {
 		return;
 	}
 	g_screen_on = true;
+	g_screen_session_start = boottime_ms();
 
 	// And disarms the automatic-shutdown RTC alarm: there is a user. The
 	// shutdown timer goes back to zero here and stays there until the screen is
@@ -1841,6 +1910,8 @@ static void power_timer_cb(lv_timer_t *timer) {
 		lv_display_trigger_activity(g_disp);
 		now = lv_tick_get();
 	}
+
+	sample_battery_policy();
 
 	// 2. music playing keeps resetting the suspend clock (but not the screen
 	//    clock -- the screen still dims while a track plays untouched)
@@ -2091,7 +2162,10 @@ void power_init(const power_config_t *cfg, lv_display_t *disp) {
 	if (park_secs < 15) {
 		park_secs = 15; // any lower and a pocket checked twice re-associates for nothing
 	}
+	if (park_secs > 3600) park_secs = 3600;
 	g_radio_park_after_ms = (uint32_t)park_secs * 1000u;
+	g_screen_session_start = boottime_ms();
+	sample_battery_policy();
 
 	g_power_timer = lv_timer_create(power_timer_cb, POWER_TICK_MS, NULL);
 

@@ -757,4 +757,6 @@ void waveform_set_visible(bool visible) {
 		pthread_cond_signal(&wake);
 	}
 	pthread_mutex_unlock(&lock);
+	// Allocate a worker only when the waveform layout is actually visible.
+	if (visible) waveform_start();
 }

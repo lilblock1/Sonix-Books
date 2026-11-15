@@ -4,7 +4,7 @@ Working baseline: `8dcb754968d6ad4b1f89a0aed98592e9a3cc0720`, tested by Noah
 on his HiBy R1. Development branch: `reading-overhaul`.
 
 Noah authorized a test firmware build after item 6, including items 1-6.
-Item 7 is being implemented on `codex/named-bookmarks-notes`; items 8-9 remain for later work.
+Item 7 is implemented on `codex/named-bookmarks-notes`; items 8-9 remain for later work.
 The item 7 request authorizes source changes and checks, without another firmware release.
 Do not poll build status; Noah will report results. Component checks are allowed.
 Preserve the working kernel/drivers and the firmware size/integrity safeguards.
@@ -15,7 +15,7 @@ Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 4. [x] Reading-specific physical-button mapping, including optional volume-key page turns (source and local checks; device validation pending).
 5. [x] Search inside books and jump to a result (source and local checks; device validation pending).
 6. [x] SD-card font selection with preview and seven-family font pack (source and local checks; device validation pending).
-7. [ ] Named bookmarks and notes.
+7. [x] Named bookmarks and notes (source and automated checks; device validation pending).
 8. [ ] Offline dictionary lookup from the reader.
 9. [ ] TXT books with reading controls, bookmarks and resume.
 
@@ -26,3 +26,4 @@ Noah authorized an optional Wi-Fi Test channel and automatic prereleases only
 after all automated checks pass; retain hardware_tested:false until tested.
 
 Items 1–5 usage, limits and validation: [READING_LIBRARY.md](READING_LIBRARY.md).
+Item 7 usage, persistence and validation: [BOOKMARKS_AND_NOTES.md](BOOKMARKS_AND_NOTES.md).

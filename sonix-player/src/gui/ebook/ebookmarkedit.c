@@ -73,6 +73,16 @@ static void tab_cb(lv_event_t *e) {
 	keyboard_show_caret(note_field, notes);
 }
 
+static void newline_cb(lv_event_t *e) {
+	(void)e;
+	lv_obj_set_hidden(name_field, true);
+	lv_obj_set_hidden(note_field, false);
+	keyboard_set_field(keyboard, note_field);
+	keyboard_show_caret(name_field, false);
+	keyboard_show_caret(note_field, true);
+	lv_textarea_add_text(note_field, "\n");
+}
+
 static lv_obj_t *button(const char *text, int x, int y, int width, lv_event_cb_t cb, void *user) {
 	lv_obj_t *obj = lv_btn_create(overlay);
 	lv_obj_set_pos(obj, x, y);
@@ -119,8 +129,10 @@ static void build(gui_config_t *cfg) {
 	lv_obj_set_pos(title, pad + 92, pad + 14);
 	lv_obj_add_style(title, &theme_style_text, 0);
 	lv_obj_set_style_text_font(title, &font_ui_20, 0);
-	button("Name", pad, pad + 64, (width - 2 * pad - 8) / 2, tab_cb, NULL);
-	button("Note", width / 2 + 4, pad + 64, (width - 2 * pad - 8) / 2, tab_cb, (void *)1);
+	int tab_width = (width - 2 * pad - 16) / 3;
+	button("Name", pad, pad + 64, tab_width, tab_cb, NULL);
+	button("Note", pad + tab_width + 8, pad + 64, tab_width, tab_cb, (void *)1);
+	button("New line", pad + 2 * (tab_width + 8), pad + 64, tab_width, newline_cb, NULL);
 	name_field = field(cfg, pad + 128, false);
 	note_field = field(cfg, pad + 128, true);
 	notice = lv_label_create(overlay);

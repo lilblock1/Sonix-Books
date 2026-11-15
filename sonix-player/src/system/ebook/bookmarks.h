@@ -22,14 +22,12 @@
 //
 // Which book each hash belongs to is not written down anywhere, and does not
 // need to be: the page that lists them walks the Ebook folder and hashes what
-// is there. A book deleted from the card simply stops appearing, and its
-// entries cost forty bytes until a factory reset.
+// is there. A book deleted from the card simply stops appearing; its saved
+// marks remain available if the same path is restored.
 // ---------------------------------------------------------------------------
 
-// How many a single book may hold. The config table has room for far more than
-// anyone will make, but a list that cannot be scrolled to the end is not a
-// list -- and an unbounded one would be a book that can fill the file by
-// itself.
+// Bound the UI and transaction size. The shared settings capacity can be
+// reached earlier across multiple books; writes report that limit explicitly.
 #define BOOKMARK_MAX_PER_BOOK 64
 
 // The snippet is cut to fit a config value (128 bytes) with the position and

@@ -5,7 +5,7 @@ Development branch: `codex/named-bookmarks-notes`, based on the released
 
 In an open book, open the reading menu with Play/Pause or a centre long press,
 then choose **Bookmark / note**. The **Name** and **Note** tabs share the
-on-screen keyboard. **Save** adds the bookmark; **Cancel** or Play/Pause
+on-screen keyboard; **New line** inserts a line break in the note. **Save** adds the bookmark; **Cancel** or Play/Pause
 discards the edit. Opening the editor at a position already bookmarked edits
 that bookmark rather than creating a duplicate. Blank name and note fields
 save an ordinary bookmark. Double tapping the top bookmark zone still saves

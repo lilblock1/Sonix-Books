@@ -13,5 +13,6 @@
 // The screen stays on while the card is open.
 
 void fwupdate_show(void);
+void fwupdate_show_extras(void);
 
 #endif /* FWUPDATE_H */

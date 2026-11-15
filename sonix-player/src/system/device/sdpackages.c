@@ -284,6 +284,19 @@ static sdpackages_result_t install(const char *root, int category, const char *g
 	transfer.total = expanded;
 	sdpackages_result_t result = SDPACKAGES_OK;
 	for (int i = 0; i < count && result == SDPACKAGES_OK; i++) result = extract(&transfer, &members[i], stage);
+	// Package manifest was verified above. Retain the core member's digest for
+	// a corruption check before loading executable code. A hidden marker cannot
+	// be provided by a package; it is written only by the installer.
+	if (game && result == SDPACKAGES_OK) {
+		char member_path[SD_GAME_ID_MAX+20], hash_path[SD_GAME_ID_MAX+24], hash_text[68];
+		snprintf(member_path,sizeof(member_path),"Games/%s/core.so",game);
+		snprintf(hash_path,sizeof(hash_path),"Games/%s/.core-sha256",game);
+		for(int i=0;i<count;++i) if(!strcmp(members[i].path,member_path)) {
+			snprintf(hash_text,sizeof(hash_text),"%s\n",members[i].sha);
+			if(!join(marker,sizeof(marker),stage,hash_path)||!write_text(marker,hash_text)) result=SDPACKAGES_IO;
+			break;
+		}
+	}
 	free(members); fclose(file);
 	if (stopped(&transfer)) result = SDPACKAGES_CANCELLED;
 	char old[SDPACKAGES_VERSION] = "", old_version[SDPACKAGES_VERSION], complete[96];

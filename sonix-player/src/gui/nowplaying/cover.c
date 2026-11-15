@@ -1839,6 +1839,13 @@ static sqlite3 *thumb_db;
 // this lock.
 static pthread_mutex_t thumb_db_lock = PTHREAD_MUTEX_INITIALIZER;
 
+void cover_cache_trim_memory(void) {
+	// A thumbnail worker may have the database; never stall the UI on it.
+	if (pthread_mutex_trylock(&thumb_db_lock) != 0) return;
+	if (thumb_db) sqlite3_db_release_memory(thumb_db);
+	pthread_mutex_unlock(&thumb_db_lock);
+}
+
 // Where the open cache came from, and which file it was, so that a cache
 // deleted from under it is noticed (see cover_cache_reopen_if_replaced).
 static char thumb_db_base[512];

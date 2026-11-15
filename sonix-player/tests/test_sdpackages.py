@@ -72,7 +72,30 @@ def main():
         custom = card / 'Ebook/Fonts/Custom.ttf'; custom.parent.mkdir(parents=True); custom.write_bytes(b'custom')
         assert install(third) == (0, third)
         assert custom.read_bytes() == b'custom'
-        print('SD package hashes, bounded streaming, path checks, cancellation, rollback and pruning passed')
+        # OTA passes a pinned Linux directory descriptor via procfs. If
+        # the original pathname is replaced, installation must still reach
+        # the opened directory rather than the new filesystem/path.
+        card_fd = os.open(card, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            detached = folder / 'original-card'
+            card.rename(detached)
+            card.mkdir()
+            pinned = f'/proc/self/fd/{card_fd}/.'
+            fourth = 'v0.3.0.4-test'
+            bundle.build(fourth, [source], package, require_r1=False)
+            digest = hashlib.sha256(package.read_bytes()).hexdigest()
+            result = subprocess.check_output(
+                [str(exe), pinned, str(package), fourth, digest, '0'],
+                pass_fds=(card_fd,), text=True).strip()
+            assert result == '0 ' + fourth, result
+            assert not list(card.iterdir()), 'installer wrote through the replaced card path'
+            managed = detached / '.sonix/packages'
+            generation = (managed / 'active').read_text().strip()
+            assert (managed / generation / '.complete').read_text().strip() == 'SDPKG1 ' + fourth
+            assert (detached / 'Ebook/Fonts/Custom.ttf').read_bytes() == b'custom'
+        finally:
+            os.close(card_fd)
+        print('SD package hashes, bounded streaming, path checks, cancellation, rollback, pruning and pinned-directory installation passed')
 
 
 if __name__ == '__main__':

@@ -54,6 +54,7 @@ void gbinput_set_glass(int width, int height);
 // reader thread: the receiver must go through gui_post() to touch anything in
 // LVGL. May be NULL.
 bool gbinput_start(const gbinput_zone_t *zones, int count, void (*on_menu)(void));
+bool gbinput_start_for(const gbinput_zone_t *zones, int count, void (*on_menu)(void), void (*on_keys)(uint16_t));
 
 // Hands the screen back and stops the thread. Also clears the buttons, or the
 // last direction held would stay held forever.

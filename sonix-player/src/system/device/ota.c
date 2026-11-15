@@ -300,11 +300,21 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 }
 
 static ota_result_t do_check(void) {
-	wifi_status_t wifi;
-	wifi_get_status(&wifi);
-	if (wifi.state != WIFI_STATE_CONNECTED) {
-		return OTA_NO_NETWORK;
+	// The reader may have just restored a previously enabled radio. Wait
+	// on this worker, never the UI thread, for association and DHCP. Do
+	// not override a radio the user explicitly switched off.
+	bool online = false;
+	for (unsigned attempt = 0; attempt <= 40; ++attempt) {
+		if (cancelled()) return OTA_CANCELLED;
+		if (!wifi_get_enabled()) break;
+		char ip[40];
+		if (wifi_interface_address(ip, sizeof(ip))) {
+			online = true;
+			break;
+		}
+		if (attempt < 40) usleep(500 * 1000);
 	}
+	if (!online) return OTA_NO_NETWORK;
 	if (!stem[0]) {
 		return OTA_NO_MODEL;
 	}

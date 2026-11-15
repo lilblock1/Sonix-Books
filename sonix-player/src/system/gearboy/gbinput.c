@@ -9,7 +9,8 @@
 // On the simulator the glass is a mouse in an SDL window: there is no evdev node
 // to take over, so input stays whatever LVGL sends to the buttons -- one finger
 // at a time, which is enough to exercise the page.
-bool gbinput_start(const gbinput_zone_t *zones, int count, void (*on_menu)(void)) {
+bool gbinput_start_for(const gbinput_zone_t *zones, int count, void (*on_menu)(void), void (*on_keys)(uint16_t)) {
+	(void)on_keys;
 	(void)zones;
 	(void)count;
 	(void)on_menu;
@@ -53,6 +54,7 @@ static volatile bool active_flag;
 static gbinput_zone_t zones[MAX_ZONES];
 static int zone_count;
 static void (*menu_cb)(void);
+static void (*keys_cb)(uint16_t);
 
 // The screen size raw coordinates are mapped onto, set by gbinput_set_glass().
 // Defaults to the R3 Pro II's panel. (Not panel_: PANEL_H is panel.h's guard.)
@@ -354,7 +356,7 @@ static void *reader_thread(void *arg) {
 			}
 			last_mask = mask;
 
-			gearboy_set_keys((uint16_t)(mask & ~GBINPUT_KEY_MENU));
+			if (keys_cb) keys_cb((uint16_t)(mask & ~GBINPUT_KEY_MENU));
 
 			pending_count = 0;
 			pending_x = pending_y = pending_id = -1;
@@ -362,7 +364,7 @@ static void *reader_thread(void *arg) {
 	}
 
 	close(fd);
-	gearboy_set_keys(0);
+	if (keys_cb) keys_cb(0);
 	active_flag = false;
 	return NULL;
 }
@@ -398,7 +400,7 @@ static uint16_t held_mask(held_t *held, const contact_t *pending, int count) {
 	return mask;
 }
 
-bool gbinput_start(const gbinput_zone_t *list, int count, void (*on_menu)(void)) {
+bool gbinput_start_for(const gbinput_zone_t *list, int count, void (*on_menu)(void), void (*on_keys)(uint16_t)) {
 	if (active_flag) {
 		return true;
 	}
@@ -422,6 +424,7 @@ bool gbinput_start(const gbinput_zone_t *list, int count, void (*on_menu)(void))
 	memcpy(zones, list, (size_t)count * sizeof(zones[0]));
 	zone_count = count;
 	menu_cb = on_menu;
+	keys_cb = on_keys;
 
 	int fd = open(node, O_RDONLY | O_NONBLOCK);
 	if (fd < 0) {
@@ -463,8 +466,17 @@ void gbinput_stop(void) {
 	}
 	active_flag = false;
 	menu_cb = NULL;
-	gearboy_set_keys(0);
+	if (keys_cb) keys_cb(0);
+	keys_cb = NULL;
 	panel_touch_enable(true);
 }
 
 #endif /* GB_CORE && !HOST_BUILD */
+
+bool gbinput_start(const gbinput_zone_t *zones, int count, void (*on_menu)(void)) {
+#if GB_CORE && !defined(HOST_BUILD)
+	return gbinput_start_for(zones,count,on_menu,gearboy_set_keys);
+#else
+	return gbinput_start_for(zones,count,on_menu,NULL);
+#endif
+}

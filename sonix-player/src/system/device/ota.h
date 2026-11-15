@@ -66,6 +66,8 @@ bool ota_store_check_start(void);
 bool ota_store_download_start(unsigned index);
 size_t ota_store_count(void);
 const game_store_item_t *ota_store_item(unsigned index);
+// Valid until next store refresh. GUI copies these fixed-size pixels.
+const uint8_t *ota_store_logo(unsigned index);
 // Downloads and installs only selected extras for the installed firmware. No .upt.
 bool ota_extras_start(unsigned mask);
 // GUI thread: only components without a current managed version.

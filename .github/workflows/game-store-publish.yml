@@ -1,0 +1,51 @@
+name: Publish one validated game package (no firmware)
+on:
+  push:
+    branches: [game-store-content]
+    paths: ['game-store/publish-request.json']
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: sonix-game-store
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: contains(github.event.head_commit.message, '[game-publish]')
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require an explicit, exact hardware-confirmed core artifact
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          r=json.load(open('game-store/publish-request.json'))
+          assert r['hardware_verified'] is True and r['runtime_abi']==1
+          assert type(r['run']) is int and r['run']>0
+          assert re.fullmatch(r'sonix-game-v1-[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?-v(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.spk',r['asset'])
+          assert re.fullmatch(r'[0-9a-f]{64}',r['sha256'])
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('RUN_ID='+str(r['run'])+'\nASSET='+r['asset']+'\nEXPECTED_SHA='+r['sha256']+'\n')
+          PY
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > source.json
+          python3 - <<'PY'
+          import json
+          r=json.load(open('source.json'))
+          assert r['head_branch']=='game-store-content' and r['path'].split('@')[0]=='.github/workflows/game-store-core.yml'
+          assert r['status']=='completed' and r['conclusion']=='success'
+          PY
+          gh run download "$RUN_ID" -n sonix-game-candidate -D candidate
+          printf '%s  %s\n' "$EXPECTED_SHA" "candidate/$ASSET" | sha256sum -c -
+      - name: Add exactly one immutable versioned game asset to the catalog
+        run: |
+          gh release view sonix-game-store-v1 --json tagName,isDraft,isPrerelease,assets > catalog.json
+          python3 - <<'PY'
+          import json,os
+          r=json.load(open('catalog.json'))
+          assert r['tagName']=='sonix-game-store-v1' and r['isPrerelease'] and not r['isDraft']
+          assert all(a['name']!=os.environ['ASSET'] for a in r['assets']), 'Version already published; increment the core version'
+          PY
+          gh release upload sonix-game-store-v1 "candidate/$ASSET"

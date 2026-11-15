@@ -2938,6 +2938,7 @@ static void build_menu(gui_config_t *cfg) {
 static void reader_loaded_cb(lv_event_t *e) {
 	(void)e;
 	readingkeys_enter(readingkeys_mode());
+	power_set_offline_reading(true);
 	topbar_set_hidden(true);
 	back_btn_force_hidden(true);
 }
@@ -2946,6 +2947,7 @@ static void reader_unloaded_cb(lv_event_t *e) {
 	zoom_close();
 	(void)e;
 	readingkeys_leave();
+	power_set_offline_reading(false);
 	ebookfind_abort();
 	ebookdictionary_abort();
 	ebookmarkedit_abort(ebookreader_screen);

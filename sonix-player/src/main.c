@@ -2391,6 +2391,7 @@ int main(int argc, char **argv) {
 		ui_heartbeat++;
 		uint32_t time_till_next = lv_timer_handler();
 		power_keep_animations_paused();
+		if (power_update_display_policy()) time_till_next = 0;
 		if (time_till_next > MAIN_LOOP_MAX_SLEEP_MS) {
 			time_till_next = MAIN_LOOP_MAX_SLEEP_MS; // also catches LV_NO_TIMER_READY
 		}

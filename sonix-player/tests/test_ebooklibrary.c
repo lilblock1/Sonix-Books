@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
 	book(root, "z-file.epub", "Alpha Story", "Zoe Writer", 1000000000);
 	book(root, "a-file.EPUB", "Zulu Story", "Amy Writer", 1000000200);
 	book(root, "bad.epub", "BROKEN", "", 1000000100);
-	book(root, "ignored.txt", "Not yet supported", "", 1000000000);
+	book(root, "ignored.mp3", "Not a book", "", 1000000000);
 	book(root, ".hidden.epub", "Hidden", "", 1000000000);
 	book(sub, "buried.epub", "A Distant Book", "\xc3\x89mile Writer", 1000000000);
 	book(sub, "symbols.epub", "100%_Literal", "Tester", 1000000000);
@@ -186,6 +186,19 @@ int main(int argc, char **argv) {
 	ebooklibrary_scan(root, "escape", "", EBOOKLIBRARY_TITLE, NULL, r, NULL, NULL);
 	assert(r->unavailable);
 #endif
+
+	/* Native books are discovered without launching a heavy parser/importer
+	 * while scanning metadata. Original EPUB metadata remains unchanged. */
+	folder(root, "Formats"); char formats[EBOOKLIBRARY_PATH]; join(formats, root, "Formats");
+	const char *extensions[] = {"txt", "text", "pdf", "mobi", "azw", "azw3", "prc", "xps", "oxps", "fb2", "fbz", "html", "htm", "xhtml", "md", "markdown", "rtf", "docx", "odt", "cbz", "cbr", "cbt"};
+	for (unsigned i = 0; i < sizeof(extensions) / sizeof(*extensions); i++) {
+		char file[32]; snprintf(file, sizeof(file), "probe.%s", extensions[i]);
+		book(formats, file, "Do not parse during scan", "", 1000000000);
+	}
+	first = opens;
+	ebooklibrary_scan(root, "Formats", "", EBOOKLIBRARY_TITLE, NULL, r, NULL, NULL);
+	assert(r->count == (int)(sizeof(extensions) / sizeof(*extensions)) && opens == first);
+	assert(!ebook_supported("unsupported.doc") && !ebook_supported("unsupported.kfx"));
 
 	/* Oversized directories keep the sorted first 300, with an honest limit. */
 	folder(root, "Many"); char many[EBOOKLIBRARY_PATH]; join(many, root, "Many");

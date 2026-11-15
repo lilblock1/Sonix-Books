@@ -11,7 +11,7 @@ permissions:
   contents: read
 concurrency:
   group: native-readers-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   native-host:
     runs-on: ubuntu-24.04
@@ -25,14 +25,15 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: sonix-player/native-sdk
-          key: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
+          key: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-${{ github.run_id }}
+          restore-keys: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-
       - name: Build pinned native readers and collect their licenses
         run: python3 sonix-player/tools/native-reader/build.py --target host --output native-host
       - uses: actions/cache/save@v4
         if: always()
         with:
           path: sonix-player/native-sdk
-          key: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
+          key: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-${{ github.run_id }}
       - uses: actions/upload-artifact@v4
         with:
           name: native-reader-host
@@ -60,14 +61,15 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: sonix-player/native-sdk
-          key: native-reader-r1-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
+          key: native-reader-r1-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-${{ github.run_id }}
+          restore-keys: native-reader-r1-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-
       - name: Build isolated MIPS readers (no firmware image)
         run: python3 sonix-player/tools/native-reader/build.py --target r1 --output native-r1
       - uses: actions/cache/save@v4
         if: always()
         with:
           path: sonix-player/native-sdk
-          key: native-reader-r1-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
+          key: native-reader-r1-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-${{ github.run_id }}
       - uses: actions/upload-artifact@v4
         with:
           name: native-reader-r1

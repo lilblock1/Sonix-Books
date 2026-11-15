@@ -82,6 +82,7 @@
 // ---------------------------------------------------------------------------
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t enabled_changed = PTHREAD_COND_INITIALIZER;
 static pthread_t worker;
 static bool worker_running;
 static bool enabled;
@@ -365,9 +366,18 @@ bool sonixlink_get_enabled(void) {
 void sonixlink_set_enabled(bool on) {
 	pthread_mutex_lock(&lock);
 	enabled = on;
+	pthread_cond_broadcast(&enabled_changed);
 	pthread_mutex_unlock(&lock);
 	config_set_int("wireless", "sonixlink", on ? 1 : 0);
 	config_save();
+}
+
+void sonixlink_wait_enabled(void) {
+	pthread_mutex_lock(&lock);
+	while (!enabled) {
+		pthread_cond_wait(&enabled_changed, &lock);
+	}
+	pthread_mutex_unlock(&lock);
 }
 
 // ---------------------------------------------------------------------------
@@ -2968,12 +2978,14 @@ static void *sonixlink_worker(void *unused) {
 		}
 
 		if (!sonixlink_get_enabled()) {
-			if (listener >= 0) {
-				for (int i = 0; i < MAX_CLIENTS; i++) {
-					if (clients[i].fd >= 0) {
-						client_close(&clients[i]);
-					}
+			// Bluetooth may have handed us a client before a TCP listener
+			// was ever opened. Release all clients before sleeping.
+			for (int i = 0; i < MAX_CLIENTS; i++) {
+				if (clients[i].fd >= 0) {
+					client_close(&clients[i]);
 				}
+			}
+			if (listener >= 0) {
 				close(listener);
 				listener = -1;
 				if (beacon >= 0) {
@@ -2989,7 +3001,9 @@ static void *sonixlink_worker(void *unused) {
 				pthread_mutex_unlock(&lock);
 				printf("sonixlink: off\n");
 			}
-			usleep(300 * 1000);
+			// A disabled service has no useful periodic work. The shared
+			// predicate under lock also prevents missing a quick enable.
+			sonixlink_wait_enabled();
 			continue;
 		}
 

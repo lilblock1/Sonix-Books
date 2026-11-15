@@ -4778,6 +4778,10 @@ static void sheet_move_to(int x, bool animate) {
 
 bool player_sheet_is_open(void) { return sheet_open; }
 
+bool player_waveform_visible(void) {
+	return layout_wave_now && wave_canvas && (sheet_open || drag_committed);
+}
+
 bool player_sheet_drag_active(void) { return drag_committed; }
 
 // The status bar over the open player, when it stays up there: blurring the

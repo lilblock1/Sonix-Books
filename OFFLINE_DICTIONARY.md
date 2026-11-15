@@ -29,7 +29,8 @@ WordNet 3.0. It includes explicit irregular-form aliases from its exception
 lists, such as **went** → **go**. It is a headword dictionary, without automatic
 stemming, translation, pronunciation or spell correction. Try a base form when
 an inflected form has no entry. Other dictionaries may be selected in the
-dropdown; the selection is retained in memory without adding settings writes.
+selector; **More dictionaries** reaches the remaining choices. The selection
+is retained in memory without adding settings writes.
 
 ## Other dictionaries and limits
 

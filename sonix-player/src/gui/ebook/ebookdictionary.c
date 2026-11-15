@@ -11,6 +11,7 @@
 #include "src/system/input/readingkeys.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/keyboard.h"
+#include "src/gui/shell/popover.h"
 #include "src/gui/shell/theme.h"
 
 #define KEYBOARD_H 316
@@ -28,12 +29,13 @@ typedef struct {
 } result_t;
 
 static gui_config_t *cfg;
-static lv_obj_t *reader, *overlay, *field, *picker, *notice, *body, *meaning;
+static lv_obj_t *reader, *overlay, *field, *picker, *picker_label, *notice, *body, *meaning;
 static keyboard_t *keyboard;
 static lv_timer_t *timer;
 static ebookdict_catalog_t catalog;
 static char selected_id[EBOOKDICT_ID];
-static bool active, loading, started, populating;
+static bool active, loading, started;
+static unsigned picker_page;
 static int body_top;
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -129,29 +131,20 @@ static bool queue(bool scan) {
 
 static void render_catalog(const ebookdict_catalog_t *found) {
 	catalog = *found;
-	populating = true;
 	if (!catalog.count) {
-		lv_dropdown_set_options(picker, "No dictionaries");
+		lv_label_set_text(picker_label, "No dictionaries");
 		selected_id[0] = 0;
 		lv_label_set_text(notice, "Add the dictionary pack to Ebook/Dictionaries on the SD card, then reopen Dictionary.");
 	} else {
-		char choices[EBOOKDICT_MAX * EBOOKDICT_ID];
-		size_t used = 0;
 		unsigned selected = 0;
 		for (unsigned i = 0; i < catalog.count; i++) {
 			if (!strcmp(selected_id, catalog.entries[i].id)) selected = i;
-			if (i) choices[used++] = '\n';
-			size_t n = strlen(catalog.entries[i].name);
-			memcpy(choices + used, catalog.entries[i].name, n); used += n;
 		}
-		choices[used] = 0;
-		lv_dropdown_set_options(picker, choices);
-		lv_dropdown_set_selected(picker, selected);
+		lv_label_set_text(picker_label, catalog.entries[selected].name);
 		memcpy(selected_id, catalog.entries[selected].id, strlen(catalog.entries[selected].id) + 1);
 		lv_label_set_text(notice, catalog.truncated ? "Dictionary list limit reached. Choose a dictionary and press Lookup." :
 			"Enter a word or phrase, then press Lookup.");
 	}
-	populating = false;
 }
 
 static void render_definition(const ebookdict_result_t *result) {
@@ -212,24 +205,50 @@ static void changed_cb(lv_event_t *e) {
 	reset_definition();
 	if (!loading) { cancel_work(); lv_timer_pause(timer); lv_label_set_text(notice, "Press Lookup to search offline."); }
 }
-static void picker_cb(lv_event_t *e) {
-	(void)e;
-	if (!active || populating || loading) return;
-	unsigned selected = lv_dropdown_get_selected(picker);
+static void choose_dictionary(void *user) {
+	if (!active || loading) return;
+	unsigned selected = (unsigned)(uintptr_t)user;
 	if (selected >= catalog.count) return;
 	memcpy(selected_id, catalog.entries[selected].id, strlen(catalog.entries[selected].id) + 1);
+	lv_label_set_text(picker_label, catalog.entries[selected].name);
 	changed_cb(NULL);
+}
+
+static void show_picker(void);
+static void more_dictionaries(void *unused) {
+	(void)unused;
+	picker_page = picker_page ? 0 : 6;
+	show_picker();
+}
+
+static void show_picker(void) {
+	// The shared popover holds seven rows; page six choices plus a way onward.
+	static popover_item_t items[7];
+	unsigned count = 0;
+	for (unsigned i = picker_page; i < catalog.count && count < 6; i++)
+		items[count++] = (popover_item_t){catalog.entries[i].name, choose_dictionary,
+			(void *)(uintptr_t)i, !strcmp(selected_id, catalog.entries[i].id)};
+	if (catalog.count > 6)
+		items[count++] = (popover_item_t){picker_page ? "Previous dictionaries" : "More dictionaries", more_dictionaries, NULL, false};
+	if (count) popover_show(picker, items, (int)count);
+}
+
+static void picker_cb(lv_event_t *e) {
+	(void)e;
+	if (!active || loading) return;
+	picker_page = 0;
+	show_picker();
 }
 static void clear_cb(lv_event_t *e) { (void)e; lv_textarea_set_text(field, ""); keyboard_show(true); }
 
 void ebookdictionary_abort(void) {
+	if (active) popover_close();
 	active = loading = false;
 	cancel_work();
 	if (overlay) {
 		keyboard_show(false);
 		reset_definition();
 		lv_obj_set_hidden(overlay, true);
-		lv_dropdown_close(picker);
 	}
 	if (timer) lv_timer_pause(timer);
 }
@@ -266,12 +285,18 @@ static void build(void) {
 	lv_obj_set_pos(title, pad + 100, pad + 12);
 	lv_obj_add_style(title, &theme_style_text, 0);
 	lv_obj_set_style_text_font(title, &font_ui_24, 0);
-	picker = lv_dropdown_create(overlay);
+	picker = lv_btn_create(overlay);
 	lv_obj_set_pos(picker, pad, pad + 64);
 	lv_obj_set_size(picker, width - 2 * pad, 52);
 	lv_obj_add_style(picker, &theme_style_card, 0);
-	lv_obj_set_style_text_font(picker, &font_ui_20, 0);
-	lv_obj_add_event_cb(picker, picker_cb, LV_EVENT_VALUE_CHANGED, NULL);
+	lv_obj_add_style(picker, &theme_style_card_pressed, LV_STATE_PRESSED);
+	lv_obj_add_event_cb(picker, picker_cb, LV_EVENT_CLICKED, NULL);
+	picker_label = lv_label_create(picker);
+	lv_obj_set_width(picker_label, lv_pct(100));
+	lv_label_set_long_mode(picker_label, LV_LABEL_LONG_DOT);
+	lv_obj_add_style(picker_label, &theme_style_text, 0);
+	lv_obj_set_style_text_font(picker_label, &font_ui_20, 0);
+	lv_obj_center(picker_label);
 	field = lv_textarea_create(overlay);
 	lv_textarea_set_one_line(field, true);
 	lv_textarea_set_max_length(field, 60);
@@ -312,7 +337,7 @@ void ebookdictionary_open(void) {
 	if (!overlay) build();
 	ebookdictionary_abort();
 	memset(&catalog, 0, sizeof(catalog));
-	lv_dropdown_set_options(picker, "Loading dictionaries...");
+	lv_label_set_text(picker_label, "Loading dictionaries...");
 	lv_textarea_set_text(field, "");
 	active = loading = true;
 	keyboard_reset(keyboard);

@@ -306,9 +306,10 @@ static ota_result_t do_check(void) {
 	bool online = false;
 	for (unsigned attempt = 0; attempt <= 40; ++attempt) {
 		if (cancelled()) return OTA_CANCELLED;
-		if (!wifi_get_enabled()) break;
+		bool enabled = wifi_get_enabled();
+		if (!enabled && !config_get_int("wireless", "wifi", 0)) break;
 		char ip[40];
-		if (wifi_interface_address(ip, sizeof(ip))) {
+		if (enabled && wifi_interface_address(ip, sizeof(ip))) {
 			online = true;
 			break;
 		}

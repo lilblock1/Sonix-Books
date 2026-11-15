@@ -72,6 +72,32 @@ def main():
         custom = card / 'Ebook/Fonts/Custom.ttf'; custom.parent.mkdir(parents=True); custom.write_bytes(b'custom')
         assert install(third) == (0, third)
         assert custom.read_bytes() == b'custom'
+        # A scoped font installation never replaces other categories or legacy files.
+        split_source = folder / 'fonts.zip'
+        split_pack = folder / 'fonts.spk'
+        with zipfile.ZipFile(split_source, 'w') as a:
+            a.writestr('Ebook/Fonts/Test/Regular.ttf', b'new font' * 10000)
+        split_version = 'v0.3.0.4-test'
+        bundle.build(split_version, [split_source], split_pack, require_r1=False, component='Fonts')
+        def scoped(pack, version, category, cancel=0):
+            digest = hashlib.sha256(pack.read_bytes()).hexdigest()
+            result = subprocess.check_output([str(exe), str(card), str(pack), version, digest,
+                                              str(cancel), str(category)], text=True).strip()
+            status, active = result.split(' ', 1)
+            return int(status), active
+        combined_before = (base / 'active').read_bytes()
+        assert scoped(split_pack, split_version, 1)[0] != 0  # cross-category injection
+        assert not (card / '.sonix/packages-dictionaries').exists()
+        assert scoped(split_pack, split_version, 0, cancel=1)[0] != 0
+        assert scoped(split_pack, split_version, 0) == (0, split_version)
+        font_base = card / '.sonix/packages-fonts'
+        font_generation = (font_base / 'active').read_text().strip()
+        assert (font_base / font_generation / 'Ebook/Fonts/Test/Regular.ttf').read_bytes() == b'new font' * 10000
+        assert (base / 'active').read_bytes() == combined_before
+        assert custom.read_bytes() == b'custom'
+        assert scoped(package, third, 0)[0] != 0  # combined pack refused in a scope
+        assert (font_base / 'active').read_text().strip() == font_generation
+
         # OTA passes a pinned Linux directory descriptor via procfs. If
         # the original pathname is replaced, installation must still reach
         # the opened directory rather than the new filesystem/path.

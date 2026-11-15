@@ -85,6 +85,7 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t enabled_changed = PTHREAD_COND_INITIALIZER;
 static pthread_t worker;
 static bool worker_running;
+static void start_workers_locked(void);
 static bool enabled;
 static bool verbose;
 
@@ -284,7 +285,7 @@ void sonixlink_publish(const sonixlink_state_t *state) {
 		return;
 	}
 	pthread_mutex_lock(&lock);
-	bool new_track = strcmp(g_state.path, state->path) != 0;
+	bool new_track = enabled && strcmp(g_state.path, state->path) != 0;
 	g_state = *state;
 	have_state = true;
 	pthread_mutex_unlock(&lock);
@@ -366,6 +367,7 @@ bool sonixlink_get_enabled(void) {
 void sonixlink_set_enabled(bool on) {
 	pthread_mutex_lock(&lock);
 	enabled = on;
+	if (on) start_workers_locked();
 	if (!on) {
 		// Links still in the handoff queue are owned here, not by the
 		// client loop. Don't leave them open while the service sleeps.
@@ -3158,25 +3160,26 @@ static void *sonixlink_worker(void *unused) {
 	return NULL;
 }
 
-void sonixlink_init(void) {
-	if (worker_running) {
-		return;
+// Caller holds lock: serializes first enable and prevents duplicate workers.
+static void start_workers_locked(void) {
+	if (!worker_running) {
+		for (int i = 0; i < MAX_CLIENTS; i++) clients[i].fd = -1;
+		if (pthread_create(&worker, NULL, sonixlink_worker, NULL) != 0) {
+			fprintf(stderr, "sonixlink: cannot start the thread\n");
+			return;
+		}
+		pthread_detach(worker);
+		worker_running = true;
 	}
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		clients[i].fd = -1;
-	}
+	// The BT initializer is idempotent; its thread can acquire lock after
+	// this caller releases it. Retry if a previous BT worker creation failed.
+	sonixlink_bt_init();
+}
 
+void sonixlink_init(void) {
 	pthread_mutex_lock(&lock);
 	enabled = config_get_int("wireless", "sonixlink", 0) != 0;
-	pthread_mutex_unlock(&lock);
 	verbose = config_get_int("wireless", "sonixlink_log", 0) != 0;
-
-	if (pthread_create(&worker, NULL, sonixlink_worker, NULL) != 0) {
-		fprintf(stderr, "sonixlink: cannot start the thread\n");
-		return;
-	}
-	pthread_detach(worker);
-	worker_running = true;
-
-	sonixlink_bt_init();
+	if (enabled) start_workers_locked();
+	pthread_mutex_unlock(&lock);
 }

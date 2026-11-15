@@ -37,6 +37,7 @@
 #include "src/gui/wireless/dlna.h"
 #include "src/gui/wireless/sonixlink.h"
 #include "src/gui/gearboy/gearboypage.h"
+#include "src/system/device/nativegame.h"
 #include "src/gui/gearboy/gearboysettings.h"
 #include "src/gui/flappybird/flappybird.h"
 #include "src/gui/gearboy/gearboyplay.h"
@@ -520,7 +521,7 @@ void gui_notify_reading_key(uint32_t event) { gui_post(reading_key_async_cb, (vo
 static void key_async_cb(void *user_data) {
 	gui_key_t key = (gui_key_t)(uintptr_t)user_data;
 	// Transport keys belong to the activity on screen before background music.
-	if (ebookreader_key(key) || gearboyplay_key(key)) {
+	if (nativegame_busy() || ebookreader_key(key) || gearboyplay_key(key)) {
 		return;
 	}
 

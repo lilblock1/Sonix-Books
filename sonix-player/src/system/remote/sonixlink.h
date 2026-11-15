@@ -229,6 +229,8 @@ void sonixlink_init(void);
 // The switch, remembered across reboots in [wireless] sonixlink.
 bool sonixlink_get_enabled(void);
 void sonixlink_set_enabled(bool on);
+// Block background workers while SonixLink is disabled; enabling wakes all.
+void sonixlink_wait_enabled(void);
 
 // Whether a phone has asked for anything recently, and what to show on the
 // page: the address it should be pointed at, and who last spoke.

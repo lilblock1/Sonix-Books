@@ -2,6 +2,7 @@
 
 #include "src/gui/flappybird/flappybird.h"
 #include "src/gui/gearboy/gearboypage.h"
+#include "src/gui/settings/fwupdate.h"
 #include "src/gui/shell/gridpage.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/settingsrow.h"
@@ -14,6 +15,7 @@ void gamespage_init(gui_config_t *cfg) {
 		{"gearboy", &icon_menu_gearboy, &gearboypage_screen, NULL},
 #endif
 		{"flappy_bird", &icon_menu_flappy_bird, NULL, flappybird_open},
+		{"Game Store", &icon_menu_wifi_transfer, NULL, fwupdate_show_game_store},
 	};
 	gridpage_build(gamespage_screen, cfg, entries, (int)(sizeof(entries) / sizeof(entries[0])), 2, 2, true);
 	settingsrow_title(gamespage_screen, cfg, "books_games");

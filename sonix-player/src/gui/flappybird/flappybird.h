@@ -5,7 +5,7 @@
 
 #include "lvgl/lvgl.h"
 
-// Flappy Bird, from the More page.
+// Flappy Bird, opened from the unified Game Launcher.
 //
 // The artwork is read from usr/resource/sonix/gui/flappybird when the game is
 // opened and freed when it is left: nothing of it stays in memory in between.

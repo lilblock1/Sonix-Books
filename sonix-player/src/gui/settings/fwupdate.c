@@ -11,6 +11,7 @@
 #include "src/gui/shell/settingsrow.h"
 #include "src/system/core/config.h"
 #include "src/system/device/sdpackages.h"
+#include "src/system/device/nativegame.h"
 #include "src/system/net/wifi.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/firmware.h"
@@ -859,6 +860,7 @@ static void show_game_catalog(void) {
 }
 
 void fwupdate_show_game_store(void) {
+	if(nativegame_busy()) { gui_notify_popup("Previous game is closing."); return; }
 	if(ota_busy()) { gui_notify_popup("system_update_busy"); return; }
 	if(!veil) build();
 	phase=PHASE_NONE;

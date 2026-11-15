@@ -27,6 +27,40 @@ void ebook_set_cancel(ebook_cancel_t cancel, void *user) { operation_cancel = ca
 static bool native_cancelled(void) { return operation_cancel && operation_cancel(operation_user); }
 static pthread_mutex_t tools_lock = PTHREAD_MUTEX_INITIALIZER;
 static char copied_from[1200], copied_to[1200];
+static char copied_dir[1200];
+static unsigned copied_users;
+static bool trim_pending;
+
+// Only remove the exact private mkdtemp directory and known files we created.
+// Never walk the SD card or delete an arbitrary directory supplied by a book.
+static void remove_copy(const char *dir) {
+	if (!dir[0]) return;
+	char file[1400];
+	if (snprintf(file, sizeof(file), "%s/sonix_booktool", dir) < (int)sizeof(file)) unlink(file);
+	if (snprintf(file, sizeof(file), "%s/mobitool", dir) < (int)sizeof(file)) unlink(file);
+	rmdir(dir);
+}
+
+static void trim_copy_locked(void) {
+	if (copied_users) { trim_pending = true; return; }
+	remove_copy(copied_dir);
+	copied_dir[0] = copied_from[0] = copied_to[0] = 0;
+	trim_pending = false;
+}
+
+void ebook_native_trim(void) {
+	pthread_mutex_lock(&tools_lock);
+	trim_copy_locked();
+	pthread_mutex_unlock(&tools_lock);
+}
+
+static void tool_release(bool leased) {
+	if (!leased) return;
+	pthread_mutex_lock(&tools_lock);
+	if (copied_users) --copied_users;
+	if (!copied_users && trim_pending) trim_copy_locked();
+	pthread_mutex_unlock(&tools_lock);
+}
 
 void ebook_set_sd_root(const char *root) {
 	if (root && strlen(root) < sizeof(sd_root)) memcpy(sd_root, root, strlen(root) + 1);
@@ -58,7 +92,8 @@ static bool copy_binary(const char *source, const char *destination) {
 	if (!ok) unlink(destination);
 	return ok;
 }
-static bool tool_path(char out[1200]) {
+static bool tool_path(char out[1200], bool *leased) {
+	*leased = false;
 #ifdef HOST_BUILD
 	const char *override = getenv("SONIX_BOOKTOOL");
 	if (override && strlen(override) < 1200 && regular(override)) {
@@ -84,6 +119,10 @@ static bool tool_path(char out[1200]) {
 	pthread_mutex_lock(&tools_lock);
 	bool ok = !strcmp(copied_from, folder) && copied_to[0] && !access(copied_to, X_OK);
 	if (!ok) {
+		// An older generation may still be running mobitool from its directory.
+		// Do not remove it or allocate a second copy until those calls exit.
+		if (copied_users) { pthread_mutex_unlock(&tools_lock); return false; }
+		trim_copy_locked();
 		char temp[] = "/tmp/sonix-readers-XXXXXX", target[1200], mobi_source[1200], mobi_target[1200];
 		if (mkdtemp(temp)) {
 			n = snprintf(target, sizeof(target), "%s/sonix_booktool", temp);
@@ -93,10 +132,18 @@ static bool tool_path(char out[1200]) {
 				snprintf(mobi_target, sizeof(mobi_target), "%s/mobitool", temp);
 				if (regular(mobi_source)) ok = copy_binary(mobi_source, mobi_target);
 			}
-			if (ok) { memcpy(copied_from, folder, strlen(folder) + 1); memcpy(copied_to, target, strlen(target) + 1); }
+			if (ok) {
+				memcpy(copied_from, folder, strlen(folder) + 1);
+				memcpy(copied_to, target, strlen(target) + 1);
+				memcpy(copied_dir, temp, strlen(temp) + 1);
+			} else remove_copy(temp);
 		}
 	}
-	if (ok) memcpy(out, copied_to, strlen(copied_to) + 1);
+	if (ok) {
+		memcpy(out, copied_to, strlen(copied_to) + 1);
+		++copied_users;
+		*leased = true;
+	}
 	pthread_mutex_unlock(&tools_lock);
 	return ok;
 }
@@ -125,11 +172,12 @@ static bool read_exact(int fd, void *target, size_t size, int64_t deadline) {
 bool ebook_native_call(const char *path, const char *operation, uint32_t page, epub_arena_t *arena, ebook_native_result_t *out) {
 	memset(out, 0, sizeof(*out));
 	char tool[1200], number[32];
-	if (!tool_path(tool)) { last_error = "Install the native reader package through Settings > System > Update firmware."; return false; }
+	bool leased;
+	if (!tool_path(tool, &leased)) { last_error = "Install the native reader package through Settings > System > Update firmware."; return false; }
 	snprintf(number, sizeof(number), "%u", page);
 	char *args[] = {tool, (char *)operation, number, (char *)path, sd_root, NULL};
 	int pipe_fd[2];
-	if (pipe(pipe_fd)) return false;
+	if (pipe(pipe_fd)) { tool_release(leased); return false; }
 	posix_spawn_file_actions_t actions; posix_spawnattr_t attr;
 	posix_spawn_file_actions_init(&actions); posix_spawnattr_init(&attr);
 	posix_spawn_file_actions_adddup2(&actions, pipe_fd[1], STDOUT_FILENO);
@@ -142,7 +190,7 @@ bool ebook_native_call(const char *path, const char *operation, uint32_t page, e
 	int spawned = posix_spawn(&child, tool, &actions, &attr, args, environ);
 	posix_spawn_file_actions_destroy(&actions); posix_spawnattr_destroy(&attr);
 	close(pipe_fd[1]);
-	if (spawned) { close(pipe_fd[0]); last_error = "The native reader package could not start. Reinstall it from Updates."; return false; }
+	if (spawned) { close(pipe_fd[0]); tool_release(leased); last_error = "The native reader package could not start. Reinstall it from Updates."; return false; }
 	int64_t deadline = now_ms() + 45000;
 	unsigned char header[BOOKTOOL_HEADER];
 	bool ok = read_exact(pipe_fd[0], header, sizeof(header), deadline) && !memcmp(header, BOOKTOOL_MAGIC, 4);
@@ -193,6 +241,7 @@ bool ebook_native_call(const char *path, const char *operation, uint32_t page, e
 		kill(-child, SIGKILL);
 		while (waitpid(child, &result, 0) < 0 && errno == EINTR) { }
 	}
+	tool_release(leased);
 	if (!WIFEXITED(result) || WEXITSTATUS(result)) ok = false;
 	if (!ok && !last_error) last_error = "This book could not be opened within the R1 reader limits.";
 	return ok;

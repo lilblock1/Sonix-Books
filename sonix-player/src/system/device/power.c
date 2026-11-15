@@ -677,12 +677,13 @@ static void mem_defer_after_radio_change(void);
 // Takes Wi-Fi down and records that this module did it, so the same module puts
 // it back. Shared by the idle timer below and the suspend path.
 static void park_wifi_now(void) {
-	if (g_wifi_parked || !wifi_get_enabled()) {
+	if (g_wifi_parked || !wifi_get_enabled() || wifi_busy() || bluetooth_busy()) {
 		return;
 	}
+	wifi_set_enabled_transient(false);
+	if (wifi_get_enabled()) return; // rejected/busy queue: no park was made
 	g_wifi_parked = true;
 	printf("power: Wi-Fi off\n");
-	wifi_set_enabled_transient(false);
 	mem_defer_after_radio_change();
 }
 
@@ -764,6 +765,7 @@ static uint32_t g_wifi_idle_since;
 static uint32_t g_bt_idle_since;
 static bool g_offline_reading;
 static bool g_reader_wifi_parked;
+static bool g_radio_wake_pending;
 
 static power_preset_t current_preset(void) {
 	return power_preset(g_effective_profile, g_adaptive_refresh, g_reading_dim_enabled, g_instant_reading_turns);
@@ -864,8 +866,8 @@ static void park_radios_if_idle(uint32_t now) {
 		}
 		if (reader_idle && !g_wifi_parked && wifi_get_enabled() &&
 			!wifi_wanted() && since(g_wifi_idle_since, now) >= preset.reader_wifi_seconds * 1000u) {
-			g_reader_wifi_parked = true;
 			park_wifi_now();
+			g_reader_wifi_parked = g_wifi_parked;
 		}
 		return;
 	}
@@ -890,12 +892,18 @@ static void park_radios_if_idle(uint32_t now) {
 }
 
 static void unpark_radios(void) {
+	// Never overlap the shared chip's power transitions on a quick wake.
+	if (wifi_busy() || bluetooth_busy()) { g_radio_wake_pending = true; return; }
+	g_radio_wake_pending = false;
 	if (g_wifi_parked) {
 		g_wifi_parked = false;
 		g_reader_wifi_parked = false;
 		if (config_get_int("wireless", "wifi", 0)) {
 			printf("power: Wi-Fi back on\n");
 			wifi_set_enabled_transient(true);
+			if (!wifi_get_enabled()) g_wifi_parked = true;
+			g_radio_wake_pending = g_wifi_parked || g_bt_parked;
+			return; // Bluetooth waits until Wi-Fi's job is finished
 		}
 	}
 	if (g_bt_parked) {
@@ -1662,7 +1670,7 @@ bool power_update_display_policy(void) {
 
 void power_screen_off(void) {
 	ebookreader_flush_progress();
-	waveform_set_screen_on(false); // told, but not a reason to stop -- see waveform.h
+	waveform_set_screen_on(false); // cancel hidden waveform work
 	if (!g_screen_on) {
 		return;
 	}
@@ -1985,7 +1993,8 @@ static void power_timer_cb(lv_timer_t *timer) {
 	}
 
 	// 4a-bis-2. the radios, a minute after the screen goes dark
-	park_radios_if_idle(now);
+	if (g_screen_on && g_radio_wake_pending) unpark_radios();
+	else park_radios_if_idle(now);
 
 	// 4a-bis-3. the real sleep, a minute after the screen goes dark. Stopped and
 	//           off the network, the SoC halts the way the stock binary makes it

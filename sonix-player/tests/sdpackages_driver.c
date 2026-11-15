@@ -10,11 +10,14 @@ static void progress(uint64_t done, uint64_t total, void *user) { (void)total; (
 int main(int argc, char **argv) {
 	if (argc != 6 && argc != 7) return 2;
 	cancel_at = strtoull(argv[5], NULL, 10);
-	unsigned category = argc == 7 ? (unsigned)strtoul(argv[6], NULL, 10) : 0;
-	sdpackages_result_t result = argc == 7 ? sdpackages_install_extra(argv[1], category, argv[2], argv[3], argv[4], cancel, progress, NULL)
+	bool game = argc == 7 && !strncmp(argv[6], "game:", 5);
+	unsigned category = argc == 7 && !game ? (unsigned)strtoul(argv[6], NULL, 10) : 0;
+	sdpackages_result_t result = game ? sdpackages_install_game(argv[1], argv[6] + 5, argv[2], argv[3], argv[4], cancel, progress, NULL)
+		: argc == 7 ? sdpackages_install_extra(argv[1], category, argv[2], argv[3], argv[4], cancel, progress, NULL)
 		: sdpackages_install(argv[1], argv[2], argv[3], argv[4], cancel, progress, NULL);
 	char version[SDPACKAGES_VERSION], generation[SDPACKAGES_VERSION];
-	bool active = argc == 7 ? sdpackages_component_version(argv[1], category, version) : sdpackages_generation(argv[1], generation, version);
+	bool active = game ? sdpackages_game_generation(argv[1], argv[6] + 5, generation, version)
+		: argc == 7 ? sdpackages_component_version(argv[1], category, version) : sdpackages_generation(argv[1], generation, version);
 	printf("%d %s\n", result, active ? version : "none");
 	return 0;
 }

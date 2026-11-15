@@ -2104,11 +2104,9 @@ int main(int argc, char **argv) {
 	// the stock player uses with its own .hiby/.../cache folder.
 	cover_set_cache_dir(gui_cfg.sd_root_path);
 
-	// The shapes of tracks, for the player's alternative layout. The worker
-	// sleeps until a page asks for one, so starting it costs a thread and
-	// nothing else.
+	// Set the cache location only. Opening the waveform layout starts its
+	// worker on demand, so readers and users of other layouts pay no thread.
 	waveform_set_cache_dir(gui_cfg.sd_root_path);
-	waveform_start();
 
 	// User playlists: plain .m3u files in <card>/Playlist.
 	playlists_init(gui_cfg.sd_root_path);
@@ -2208,8 +2206,7 @@ int main(int argc, char **argv) {
 	// its first line.
 	btlog_init();
 	bluetooth_init();
-	// Its worker starts here but stays idle: no socket is opened until the
-	// switch is on, which the same config read decides.
+	// Read the saved switch; start remote workers only if SonixLink is on.
 	sonixlink_init();
 
 	// The sleep timers, as they were left. Before the interface: the music,

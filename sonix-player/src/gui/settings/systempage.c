@@ -39,6 +39,11 @@ lv_obj_t *sysinfo_screen;
 
 #define FIRMWARE_MIN_BATTERY_PERCENT 30
 
+static void extras_clicked_cb(lv_event_t *e) {
+	(void)e;
+	fwupdate_show_extras();
+}
+
 static void firmware_clicked_cb(lv_event_t *e) {
 	(void)e;
 
@@ -301,6 +306,7 @@ void systempage_init(gui_config_t *cfg) {
 	settingsrow_add(container, "system_about", NULL, switch_screen_cb, sysinfo_screen);
 	// Actions, not pages: settingsrow_action leaves off the chevron.
 	settingsrow_action(container, "system_update_firmware", firmware_clicked_cb, NULL);
+	settingsrow_action(container, "Downloadable Extras", extras_clicked_cb, NULL);
 	settingsrow_action(container, "system_factory_reset", factory_clicked_cb, NULL);
 
 	switcher_attach_back_gesture(systempage_screen);

@@ -360,7 +360,9 @@ bool adb_set_enabled(bool enabled) {
 }
 
 void adb_apply_saved_state(void) {
-	if (!config_get_bool("system", "adb", false)) {
+	// R1 recovery policy: keep ADB available on fresh installs. An explicit
+	// saved off choice is still respected; no boot script or gadget change.
+	if (!config_get_bool("system", "adb", true)) {
 		return;
 	}
 	wanted = true;

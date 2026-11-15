@@ -32,7 +32,8 @@ static bool installed_art(const char *id,uint8_t *out) {
 	}
 	close(fd);return ok;
 }
-static void tile(lv_obj_t *parent,int x,int y,int w,int h,uint32_t rgb,const char *text) {
+static void tile(lv_obj_t *parent,int x,int y,int w,int h,uint32_t rgb,const char *text,unsigned side) {
+	x=x*(int)side/72;y=y*(int)side/72;w=w*(int)side/72;h=h*(int)side/72;
 	lv_obj_t *o=lv_obj_create(parent);
 	lv_obj_set_size(o,w,h);lv_obj_set_pos(o,x,y);lv_obj_set_scrollable(o,false);
 	lv_obj_set_clickable(o,false);lv_obj_set_style_pad_all(o,0,0);
@@ -40,12 +41,13 @@ static void tile(lv_obj_t *parent,int x,int y,int w,int h,uint32_t rgb,const cha
 	lv_obj_set_style_bg_color(o,lv_color_hex(rgb),0);
 	lv_obj_set_style_bg_opa(o,LV_OPA_COVER,0);
 	lv_obj_t *l=lv_label_create(o);lv_label_set_text(l,text);
-	lv_obj_set_style_text_font(l,&font_ui_18,0);
+	lv_obj_set_style_text_font(l,side<60?&font_ui_14:&font_ui_18,0);
 	lv_obj_set_style_text_color(l,lv_color_hex(0x332b24),0);lv_obj_center(l);
 }
-lv_obj_t *gamelogo_create(lv_obj_t *parent,const char *id,const char *title,game_store_kind_t kind,const uint8_t *art) {
+lv_obj_t *gamelogo_create_sized(lv_obj_t *parent,const char *id,const char *title,game_store_kind_t kind,const uint8_t *art,unsigned side) {
+	if(side<48||side>88)side=LOGO_UI;
 	lv_obj_t *box=lv_obj_create(parent);
-	lv_obj_set_size(box,LOGO_UI,LOGO_UI);lv_obj_set_scrollable(box,false);
+	lv_obj_set_size(box,side,side);lv_obj_set_scrollable(box,false);
 	lv_obj_set_clickable(box,false);lv_obj_set_style_pad_all(box,0,0);
 	lv_obj_set_style_border_width(box,0,0);lv_obj_set_style_radius(box,12,0);
 	lv_obj_set_style_bg_color(box,lv_color_hex(0x34363d),0);
@@ -59,20 +61,20 @@ lv_obj_t *gamelogo_create(lv_obj_t *parent,const char *id,const char *title,game
 		data->image.header.stride=GAME_LOGO_SIDE*2;
 		data->image.data_size=GAME_LOGO_BYTES;data->image.data=data->pixels;
 		lv_obj_t *img=lv_image_create(box);lv_image_set_src(img,&data->image);
-		lv_image_set_scale(img,384);lv_obj_center(img);
+		lv_image_set_scale(img,side*256/GAME_LOGO_SIDE);lv_obj_center(img);
 		lv_obj_add_event_cb(img,logo_destroy,LV_EVENT_DELETE,data);
 		return box;
 	}
 	free(data);
 	if(id&&!strcmp(id,"2048")){
 		lv_obj_set_style_bg_color(box,lv_color_hex(0x786858),0);
-		tile(box,5,5,29,29,0xeee4d4,"2");tile(box,38,5,29,29,0xeddebd,"4");
-		tile(box,5,38,29,29,0xf7ae70,"8");tile(box,38,38,29,29,0xf68f56,"16");
+		tile(box,5,5,29,29,0xeee4d4,"2",side);tile(box,38,5,29,29,0xeddebd,"4",side);
+		tile(box,5,38,29,29,0xf7ae70,"8",side);tile(box,38,38,29,29,0xf68f56,"16",side);
 	}else if(id&&(!strcmp(id,"gearboy")||!strcmp(id,"flappy-bird"))){
 		const lv_image_dsc_t *src=!strcmp(id,"gearboy")?&icon_menu_gearboy:&icon_menu_flappy_bird;
 		lv_obj_t *img=lv_image_create(box);lv_image_set_src(img,src);
-		unsigned side=src->header.w>src->header.h?src->header.w:src->header.h;
-		if(side>LOGO_UI)lv_image_set_scale(img,LOGO_UI*256/side);
+		unsigned source_side=src->header.w>src->header.h?src->header.w:src->header.h;
+		if(source_side>side)lv_image_set_scale(img,side*256/source_side);
 		lv_obj_center(img);
 	}else{
 		char initials[3]={0};unsigned n=0;
@@ -83,4 +85,8 @@ lv_obj_t *gamelogo_create(lv_obj_t *parent,const char *id,const char *title,game
 		lv_obj_set_style_text_font(l,&font_ui_32,0);lv_obj_set_style_text_color(l,lv_color_white(),0);lv_obj_center(l);
 	}
 	return box;
+}
+
+lv_obj_t *gamelogo_create(lv_obj_t *parent,const char *id,const char *title,game_store_kind_t kind,const uint8_t *art) {
+	return gamelogo_create_sized(parent,id,title,kind,art,LOGO_UI);
 }

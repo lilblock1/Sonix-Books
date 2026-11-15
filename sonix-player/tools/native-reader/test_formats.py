@@ -2,6 +2,7 @@
 import argparse
 import binascii
 import io
+import re
 import struct
 import subprocess
 import tarfile
@@ -76,7 +77,7 @@ def main():
                 assert image.startswith(b'\x89PNG')
             if extension not in ('cbz', 'cbt'):
                 _, _, text, _ = call(args.tool, 'text', book, folder)
-                assert b'Native reader sample.' in text, (extension, text)
+                assert b'Native reader sample.' in re.sub(rb'<[^>]+>', b'', text), (extension, text)
             print(extension, 'passed', flush=True)
         (folder / 'bad.pdf').write_bytes(b'broken')
         call(args.tool, 'page', folder / 'bad.pdf', folder, success=False)

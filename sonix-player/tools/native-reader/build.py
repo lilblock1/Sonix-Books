@@ -62,13 +62,19 @@ def main():
     sources = {name: checkout(name, spec, work) for name, spec in SOURCES.items()}
 
     archive_build = build / "archive"
-    options = ["OPENSSL", "MBEDTLS", "NETTLE", "CNG", "ZLIB", "BZip2", "LIBB2", "LZMA", "ZSTD", "LZ4", "LZO", "LIBXML2", "EXPAT", "ICONV", "ACL", "XATTR", "TEST", "TAR", "CPIO", "CAT", "UNZIP"]
+    options = ["OPENSSL", "MBEDTLS", "NETTLE", "CNG", "MD", "ZLIB", "BZip2", "LIBB2", "LZMA", "ZSTD", "LZ4", "LZO", "LIBXML2", "EXPAT", "ICONV", "ACL", "XATTR", "TEST", "TAR", "CPIO", "CAT", "UNZIP"]
     cmake = ["cmake", "-S", sources["libarchive"], "-B", archive_build,
              "-DCMAKE_BUILD_TYPE=MinSizeRel", "-DCMAKE_INSTALL_PREFIX=" + str(prefix),
              "-DBUILD_SHARED_LIBS=OFF", "-DCMAKE_C_COMPILER=" + cc, "-DCMAKE_C_FLAGS=" + flags]
     cmake += ["-DENABLE_" + name + "=OFF" for name in options]
     if args.target == "r1":
-        cmake += ["-DCMAKE_SYSTEM_NAME=Linux", "-DCMAKE_SYSTEM_PROCESSOR=mipsel", "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY"]
+        # Link feature probes with the target compiler. Static-only probes can
+        # incorrectly report missing libc functions and host libraries present.
+        (archive_build / "CMakeCache.txt").unlink(missing_ok=True)
+        cmake += ["-DCMAKE_SYSTEM_NAME=Linux", "-DCMAKE_SYSTEM_PROCESSOR=mipsel",
+                  "-DCMAKE_FIND_ROOT_PATH=" + str(prefix) + ";" + str(ROOT / "rockbox-toolchain/mipsel-rockbox-linux-gnu/sysroot"),
+                  "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY", "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY",
+                  "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY"]
     run(*cmake, env=env)
     run("cmake", "--build", archive_build, "--parallel", args.jobs, env=env)
     run("cmake", "--install", archive_build, env=env)

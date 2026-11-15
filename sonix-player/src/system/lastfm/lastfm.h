@@ -50,8 +50,8 @@ typedef struct {
 	lastfm_login_result_t login_result;
 } lastfm_status_t;
 
-// Reads the session and the queue and starts the worker. Call once, after
-// config_init() and streamkeys_init().
+// Reads the saved session. Starts the worker only for an enabled account,
+// login or logout. Call once after config_init() and streamkeys_init().
 void lastfm_init(void);
 
 bool lastfm_available(void);

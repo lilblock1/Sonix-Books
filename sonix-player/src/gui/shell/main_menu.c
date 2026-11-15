@@ -22,7 +22,7 @@ void main_menu_init(gui_config_t *cfg) {
 	const grid_entry_t entries[] = {
 		{"books", &icon_menu_books, NULL, ebookpage_open},
 		{"books_continue", &icon_menu_books, NULL, ebookpage_continue},
-		{"books_games", &icon_menu_gearboy, &gamespage_screen, NULL},
+		{"Game Launcher", &icon_menu_gearboy, &gamespage_screen, NULL},
 		{"music", &icon_menu_music, &music_screen, NULL},
 		{"more", &icon_menu_more, &morepage_screen, NULL},
 		{"settings", &icon_menu_settings, &settings_screen, NULL},

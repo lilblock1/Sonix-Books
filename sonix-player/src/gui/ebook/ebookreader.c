@@ -13,6 +13,7 @@
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookbar.h"
 #include "src/gui/ebook/ebookfind.h"
+#include "src/gui/ebook/ebookdictionary.h"
 #include "src/gui/ebook/ebookfonts.h"
 #include "src/system/ebook/ebookfontlist.h"
 #include "src/gui/fonts/fonts.h"
@@ -2058,6 +2059,7 @@ bool ebookreader_key(gui_key_t key) {
 		return false;
 	}
 	if (ebookfind_key(key)) return true;
+	if (ebookdictionary_key(key)) return true;
 	if (ebookmarkedit_active(ebookreader_screen)) {
 		if (key == GUI_KEY_PLAY_PAUSE) ebookmarkedit_abort(ebookreader_screen);
 		return true;
@@ -2197,6 +2199,13 @@ static void find_open_cb(lv_event_t *e) {
 
 static void bookmark_saved(void) {
 	toast_glyph(&icon_bookmark_check, "ebookreader_bookmark_saved");
+}
+
+static void dictionary_open_cb(lv_event_t *e) {
+	(void)e;
+	if (!book || !ebook_chapter_loaded(book)) return;
+	menu_close();
+	ebookdictionary_open();
 }
 
 static void bookmark_edit_cb(lv_event_t *e) {
@@ -2769,6 +2778,8 @@ static void build_menu(gui_config_t *cfg) {
 	lv_obj_set_height(find_row, 60);
 	lv_obj_t *bookmark_row = settingsrow_action(menu_bar, "Bookmark / note", bookmark_edit_cb, NULL);
 	lv_obj_set_height(bookmark_row, 60);
+	lv_obj_t *dictionary_row = settingsrow_action(menu_bar, "Dictionary", dictionary_open_cb, NULL);
+	lv_obj_set_height(dictionary_row, 60);
 
 	// Leaving sits in its own row underneath the reading tools.
 	lv_obj_t *close_row = lv_btn_create(menu_bar);
@@ -2869,6 +2880,7 @@ static void reader_unloaded_cb(lv_event_t *e) {
 	(void)e;
 	readingkeys_leave();
 	ebookfind_abort();
+	ebookdictionary_abort();
 	ebookmarkedit_abort(ebookreader_screen);
 	back_btn_force_hidden(false);
 	topbar_set_hidden(false);
@@ -3050,6 +3062,7 @@ void ebookreader_init(gui_config_t *cfg) {
 
 	build_menu(cfg);
 	ebookfind_init(cfg, ebookreader_screen, find_restore);
+	ebookdictionary_init(cfg, ebookreader_screen);
 
 	// No switcher_attach_back_gesture() here, deliberately: the swipe-back and
 	// the page turn are the same gesture, and the page turn is the one a reader

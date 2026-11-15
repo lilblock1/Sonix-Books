@@ -15,6 +15,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dictionary-pack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and verify the separate offline English dictionary pack
+        run: python3 sonix-player/tools/build_dictionary_pack.py --output dictionary-pack
+      - name: Upload the SD-card dictionary pack (not firmware)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonix-books-offline-dictionary
+          path: dictionary-pack/
+          retention-days: 30
   r1-base:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -84,6 +97,9 @@ jobs:
             tests/test_bookmarknotes.c src/system/ebook/bookmarks.c src/system/core/config.c \
             -o build_tests/test_bookmarknotes
           ./build_tests/test_bookmarknotes
+      - name: Test offline dictionary indexing, converter and file bounds
+        working-directory: sonix-player
+        run: python3 tests/test_ebookdict.py
       - name: Test library search, folders, sorting and metadata cache
         working-directory: sonix-player
         run: |

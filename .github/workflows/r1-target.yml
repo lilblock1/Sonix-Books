@@ -124,6 +124,10 @@ jobs:
         with:
           name: sonix-books-r1-candidate
           path: candidate
+      - uses: actions/download-artifact@v4
+        with:
+          name: sonix-books-offline-dictionary
+          path: dictionary-pack
       - name: Verify the completed candidate for a test release
         env:
           TEST_BUILD: ${{ github.run_number }}
@@ -145,7 +149,9 @@ jobs:
           Stable remains a separate channel. No automatic installation occurs.
 
           The separate font pack extracts to the SD-card root (Ebook/Fonts); it is not inside the firmware.
+          The separate dictionary pack extracts to the SD-card root (Ebook/Dictionaries). Open a book > menu > Dictionary for offline lookup.
           NOTES
           gh release create "$tag" candidate/r1.upt candidate/SHA256SUMS candidate/r1-build-report.json \
             extras/reading-fonts/Sonix-Books-Fonts.zip extras/reading-fonts/Sonix-Books-Fonts.zip.sha256 \
+            dictionary-pack/Sonix-Books-Dictionary.zip dictionary-pack/Sonix-Books-Dictionary.zip.sha256 \
             --target "$SOURCE_SHA" --prerelease --latest=false --title "Sonix Books $tag (R1 test)" --notes-file test-notes.md

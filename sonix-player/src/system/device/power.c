@@ -48,6 +48,11 @@
 #include "src/system/device/axpcharge.h"
 #include "src/system/device/chargescreen.h"
 #include "src/gui/shell/gui.h"
+#include "src/gui/shell/main_menu.h"
+#include "src/gui/ebook/ebookreader.h"
+#include "src/gui/shell/quickpanel.h"
+#include "src/gui/shell/switcher.h"
+#include "src/gui/nowplaying/player.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -123,6 +128,16 @@ static lv_timer_t *g_refr_timer; // display refresh timer, paused while screen i
 static long g_max_brightness = -1;
 static lv_timer_t *g_power_timer;
 static bool g_screen_on = true;
+static bool g_adaptive_refresh = true;
+static bool g_reading_dim_enabled;
+static bool g_instant_reading_turns;
+static bool g_reading_dimmed;
+static uint32_t g_fast_refresh_ms = 16;
+#define READER_IDLE_REFRESH_MS 100u
+#define HOME_IDLE_REFRESH_MS 67u
+#define DISPLAY_IDLE_AFTER_MS 1500u
+#define READER_DIM_AFTER_MS 180000u
+#define READER_DIM_PERCENT 65
 static uint32_t g_screen_off_at; // lv_tick when the panel last went dark
 
 // The standby countdown: the idle wait before a suspend attempt. It restarts at
@@ -287,7 +302,7 @@ static uint32_t input_idle_ms(uint32_t now) {
 	uint32_t touch_idle = lv_display_get_inactive_time(g_disp);
 
 	pthread_mutex_lock(&g_lock);
-	uint32_t btn_idle = now - g_last_button_activity_ms;
+	uint32_t btn_idle = since(g_last_button_activity_ms, now);
 	pthread_mutex_unlock(&g_lock);
 
 	return touch_idle < btn_idle ? touch_idle : btn_idle;
@@ -747,6 +762,8 @@ void power_set_offline_reading(bool active) {
 	if (g_offline_reading == active) return;
 	g_offline_reading = active;
 	g_wifi_idle_since = lv_tick_get();
+	power_notify_activity();
+	if (g_disp) lv_display_trigger_activity(g_disp);
 	// Restoration runs on the power tick after any in-flight radio job
 	// completes; never queue power-on over an unfinished power-off.
 }
@@ -1515,12 +1532,66 @@ static bool (*g_wake_hook)(void);
 
 void power_set_wake_hook(bool (*cb)(void)) { g_wake_hook = cb; }
 
+// The settings value remains the user's chosen brightness. Dimming is a
+// transient hardware level only, never written back to configuration.
+static void reader_dim_set(bool dim) {
+	if (g_reading_dimmed == dim) return;
+	g_reading_dimmed = dim;
+	if (!g_screen_on) return;
+	long target = g_cfg.brightness;
+	if (dim) {
+		target = target * READER_DIM_PERCENT / 100;
+		if (target < BRIGHTNESS_ON_FLOOR) target = BRIGHTNESS_ON_FLOOR;
+		if (target > g_cfg.brightness) target = g_cfg.brightness;
+	}
+	if (target != g_hw_brightness) backlight_write(target);
+}
+
+void power_set_display_options(bool adaptive, bool reading_dim, bool instant_turns) {
+	g_adaptive_refresh = adaptive;
+	g_reading_dim_enabled = reading_dim;
+	g_instant_reading_turns = instant_turns;
+	if (!reading_dim && g_disp) reader_dim_set(false);
+}
+
+bool power_instant_reading_turns(void) { return g_instant_reading_turns; }
+
+bool power_update_display_policy(void) {
+	if (!g_screen_on || !g_disp || !g_refr_timer) return false;
+	lv_obj_t *screen = lv_screen_active();
+	bool reading = g_offline_reading && screen && screen == ebookreader_screen;
+	bool home = screen && screen == main_menu_screen;
+	uint32_t period = g_fast_refresh_ms;
+	bool dim = false;
+	if (reading || home) {
+		uint32_t idle = input_idle_ms(lv_tick_get());
+		bool quiet = !player_sheet_is_open() && !player_sheet_drag_active() &&
+					 !quickpanel_is_open() && !switcher_back_drag_active() && !gui_modal_visible() &&
+					 !gearboy_running() && !lv_anim_count_running();
+		if (quiet && idle >= DISPLAY_IDLE_AFTER_MS && g_adaptive_refresh) {
+			period = reading ? READER_IDLE_REFRESH_MS : HOME_IDLE_REFRESH_MS;
+			if (period < g_fast_refresh_ms) period = g_fast_refresh_ms;
+		}
+		dim = reading && quiet && g_reading_dim_enabled && idle >= READER_DIM_AFTER_MS;
+	}
+	reader_dim_set(dim);
+	uint32_t old = g_refr_timer->period;
+	if (old == period) return false;
+	lv_timer_set_period(g_refr_timer, period);
+	if (period < old) {
+		lv_timer_ready(g_refr_timer);
+		return true;
+	}
+	return false;
+}
+
 void power_screen_off(void) {
 	waveform_set_screen_on(false); // told, but not a reason to stop -- see waveform.h
 	if (!g_screen_on) {
 		return;
 	}
 	g_screen_on = false;
+	g_reading_dimmed = false;
 	g_screen_off_at = lv_tick_get();
 	// The screen going dark opens a new idle window: the standby countdown
 	// starts here, unless activity keeps pushing it back.
@@ -1675,6 +1746,7 @@ void power_screen_on(void) {
 
 	// resume ongoing refresh (if it was paused) ...
 	if (g_refr_timer) {
+		lv_timer_set_period(g_refr_timer, g_fast_refresh_ms);
 		lv_timer_resume(g_refr_timer);
 	}
 	lv_timer_t *anim_timer = lv_anim_get_timer();
@@ -1879,6 +1951,8 @@ void power_set_brightness(long value) {
 		value = BRIGHTNESS_MIN;
 	}
 	g_cfg.brightness = value;
+	g_reading_dimmed = false;
+	power_notify_activity();
 	if (g_screen_on) {
 		backlight_write(value); // instant (no fade) for a live settings adjustment
 	}
@@ -1963,6 +2037,7 @@ void power_init(const power_config_t *cfg, lv_display_t *disp) {
 	g_cfg = *cfg;
 	g_disp = disp;
 	g_refr_timer = disp ? lv_display_get_refr_timer(disp) : NULL;
+	if (g_refr_timer && g_refr_timer->period) g_fast_refresh_ms = g_refr_timer->period;
 	g_screen_on = true;
 	if (disp) {
 		lv_display_add_event_cb(disp, refr_request_cb, LV_EVENT_REFR_REQUEST, NULL);

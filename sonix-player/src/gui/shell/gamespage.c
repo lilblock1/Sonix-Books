@@ -8,6 +8,7 @@
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/topbar.h"
 #include "src/system/device/nativegame.h"
+#include "src/system/device/game_store.h"
 #include "src/system/gearboy/gbinput.h"
 #include <stdatomic.h>
 #include "src/system/device/sdpackages.h"
@@ -22,7 +23,7 @@
 #define MAX_GAMES 48
 #define MAX_ROMS 96
 lv_obj_t *gamespage_screen;
-static lv_obj_t *games_list,*rom_screen,*rom_list,*play_screen,*picture,*status;
+static lv_obj_t *games_list,*rom_screen,*rom_list,*play_screen,*picture,*status,*return_screen,*control_hint;
 static lv_timer_t *timer;
 static gui_config_t *config;
 static char games[MAX_GAMES][SD_GAME_ID_MAX],roms[MAX_ROMS][256],chosen[SD_GAME_ID_MAX];
@@ -33,8 +34,14 @@ static lv_image_dsc_t image;
 static bool held,raw_claimed;
 static uint16_t raw_previous;
 static atomic_uint session_generation;
-static gbinput_zone_t zones[16];
+static gbinput_zone_t zones[24];
 static unsigned zone_count;
+static lv_obj_t *control_widgets[24];
+static uint16_t control_masks[24];
+static atomic_uint visible_keys;
+static uint16_t last_visible_keys;
+static unsigned widget_count;
+static void build_controls(bool puzzle);
 
 static lv_obj_t *make_list(lv_obj_t *screen,const char *title) {
 	lv_obj_add_style(screen,&theme_style_screen,0);
@@ -72,6 +79,15 @@ static void gearboy_clicked(lv_event_t *e) {(void)e;if(available())switch_screen
 static void flappy_clicked(lv_event_t *e) {(void)e;if(available())flappybird_open();}
 static void refresh_frame(lv_timer_t *t) {
 	(void)t;
+	// Raw evdev owns the touch panel; reflect held buttons on the UI thread.
+	uint16_t visible=(uint16_t)atomic_load(&visible_keys);
+	if(visible!=last_visible_keys){
+		last_visible_keys=visible;
+		for(unsigned i=0;i<widget_count;++i){
+			if(control_masks[i]&&(visible&control_masks[i])==control_masks[i])lv_obj_add_state(control_widgets[i],LV_STATE_PRESSED);
+			else lv_obj_remove_state(control_widgets[i],LV_STATE_PRESSED);
+		}
+	}
 	if(nativegame_failed()){lv_label_set_text(status,"Could not start game. Check core, ROM and SD compatibility.");return;}
 	if(pixels&&nativegame_present(pixels,&seen)) {
 		lv_obj_invalidate(picture);
@@ -81,7 +97,7 @@ static void refresh_frame(lv_timer_t *t) {
 static void leave_play(lv_event_t *e) {
 	(void)e;
 	nativegame_stop();
-	switch_screen_return_to(rom_screen);
+	switch_screen_return_to(return_screen?return_screen:gamespage_screen);
 }
 static void raw_exit_ui(void *arg) {
 	if ((unsigned)(uintptr_t)arg == atomic_load(&session_generation) && lv_screen_active()==play_screen) leave_play(NULL);
@@ -90,6 +106,7 @@ static void raw_exit(void) { (void)gui_post(raw_exit_ui,(void*)(uintptr_t)atomic
 static void raw_keys(uint16_t mask) {
 	uint16_t pressed=mask & (uint16_t)~raw_previous;
 	raw_previous=mask;
+	atomic_store(&visible_keys,mask);
 	if(pressed&(1u<<12))nativegame_save();
 	if(pressed&(1u<<13))nativegame_load();
 	nativegame_keys(mask&0x0fff);
@@ -100,10 +117,11 @@ static void unloaded(lv_event_t *e) {
 	atomic_fetch_add(&session_generation,1);
 	if(raw_claimed){gbinput_stop();raw_claimed=false;}
 	nativegame_stop();
-	nativegame_keys(0);buttons=0;
+	nativegame_keys(0);buttons=0;atomic_store(&visible_keys,0);
 	lv_image_set_src(picture,NULL);image.data=NULL;free(pixels);pixels=NULL;
 	if(held){held=false;power_hold_screen_on(false);}
 	back_btn_force_hidden(false);
+	back_gesture_blocked(false);
 	topbar_set_hidden(false);
 }
 static void game_key(lv_event_t *e) {
@@ -112,6 +130,7 @@ static void game_key(lv_event_t *e) {
 	if(code==LV_EVENT_PRESSED)buttons|=key;
 	else if(code==LV_EVENT_RELEASED||code==LV_EVENT_PRESS_LOST)buttons&=(uint16_t)~key;
 	else return;
+	atomic_store(&visible_keys,buttons);
 	nativegame_keys(buttons);
 }
 static void save_clicked(lv_event_t *e) {(void)e;nativegame_save();}
@@ -121,12 +140,19 @@ static lv_obj_t *pad(const char *text,int x,int y,int w,int h,lv_event_cb_t cb,u
 	lv_obj_set_pos(b,x,y);lv_obj_set_size(b,w,h);
 	lv_obj_add_style(b,&theme_style_card,0);
 	lv_obj_add_style(b,&theme_style_card_pressed,LV_STATE_PRESSED);
+	lv_obj_set_scrollable(b,false);
+	lv_obj_set_style_bg_color(b,lv_color_hex(0x30363f),0);
+	lv_obj_set_style_bg_color(b,lv_color_hex(0x367cc8),LV_STATE_PRESSED);
+	lv_obj_set_style_radius(b,14,0);
+	lv_obj_set_style_border_width(b,1,0);
+	lv_obj_set_style_border_color(b,lv_color_hex(0x555e68),0);
 	lv_obj_t *l=lv_label_create(b);lv_label_set_text(l,text);lv_obj_add_style(l,&theme_style_text,0);
-	lv_obj_set_style_text_font(l,&font_ui_20,0);lv_obj_center(l);
+	lv_obj_set_style_text_font(l,&font_ui_24_bold,0);lv_obj_set_style_text_color(l,lv_color_white(),0);lv_obj_center(l);
 	lv_obj_add_event_cb(b,cb,cb==game_key?LV_EVENT_ALL:LV_EVENT_CLICKED,(void*)data);
-	if(zone_count<16) {
+	if(zone_count<sizeof(zones)/sizeof(zones[0])) {
 		uint16_t key=cb==game_key?(uint16_t)data:cb==save_clicked?1u<<12:cb==load_clicked?1u<<13:GBINPUT_KEY_MENU;
 		zones[zone_count++]=(gbinput_zone_t){x,y,w,h,key};
+		control_widgets[widget_count]=b;control_masks[widget_count++]=key;
 	}
 	return b;
 }
@@ -136,7 +162,9 @@ static void launch(const char *rom) {
 	pixels=calloc((size_t)NATIVEGAME_W*NATIVEGAME_H_PIX,sizeof(*pixels));
 	if(!pixels){gui_notify_popup("Not enough memory to start game.");return;}
 	if(!nativegame_start(chosen,rom)){free(pixels);pixels=NULL;gui_notify_popup("Cannot start game.");return;}
-	seen=0;buttons=0;
+	return_screen=lv_screen_active();
+	build_controls(!strcmp(chosen,"2048"));
+	seen=0;buttons=0;last_visible_keys=0;atomic_store(&visible_keys,0);
 	memset(&image,0,sizeof(image));
 	image.header.magic=LV_IMAGE_HEADER_MAGIC;image.header.cf=LV_COLOR_FORMAT_RGB565;
 	image.header.w=NATIVEGAME_W;image.header.h=NATIVEGAME_H_PIX;image.header.stride=NATIVEGAME_W*2;
@@ -144,7 +172,7 @@ static void launch(const char *rom) {
 	lv_image_set_src(picture,&image);
 	lv_label_set_text(status,"Starting native game...");
 	switch_screen(play_screen);
-	topbar_set_hidden(true);back_btn_force_hidden(true);
+	topbar_set_hidden(true);back_btn_force_hidden(true);back_gesture_blocked(true);
 	held=true;power_hold_screen_on(true);
 	raw_previous=0;atomic_fetch_add(&session_generation,1);
 	gbinput_set_glass(config->screen_width,config->screen_height);
@@ -161,8 +189,10 @@ static void show_roms(lv_event_t *e) {
 	if(i>=game_count||!available())return;
 	if(!gui_card_available()){gui_notify_no_card();return;}
 	snprintf(chosen,sizeof(chosen),"%s",games[i]);
+	const game_store_profile_t *profile=game_store_profile(chosen);
+	if(profile&&profile->no_rom){launch(NULL);return;}
 	lv_obj_clean(rom_list);rom_count=0;
-	settingsrow_action(rom_list,"Launch without ROM",launch_no_rom,NULL);
+	if(!profile||profile->kind!=GAME_STORE_EMULATOR)settingsrow_action(rom_list,"Launch without ROM",launch_no_rom,NULL);
 	char path[1024];
 	int n=snprintf(path,sizeof(path),"%s/Games/%s/ROMs",storage_sd_root(),chosen);
 	if(n>0&&(size_t)n<sizeof(path)){
@@ -204,12 +234,46 @@ static void refresh_library(lv_event_t *e) {
 			if(!sdpackages_game_id(id)||!sdpackages_game_core(root,id,core,sizeof(core))||
 				!sdpackages_game_generation(root,id,generation,version))continue;
 			snprintf(games[game_count],sizeof(games[0]),"%s",id);
-			snprintf(label,sizeof(label),"%s  %s",id,version);
+			const game_store_profile_t *profile=game_store_profile(id);
+			snprintf(label,sizeof(label),"%s  %s",profile?profile->title:id,version);
 			settingsrow_action(games_list,label,show_roms,(void*)(uintptr_t)game_count);++game_count;
 		}
 		closedir(dir);
 	}
 	if(!game_count)info(games_list,"Download more games and emulators from More > Game Store.");
+}
+static void build_controls(bool puzzle) {
+	for(unsigned i=0;i<widget_count;++i)lv_obj_delete(control_widgets[i]);
+	widget_count=zone_count=0;
+	lv_label_set_text(control_hint,puzzle?"Move tiles  |  Undo with B":"Hold direction and action together");
+	if(puzzle){
+		// Dedicated wide directional targets, no unused emulator buttons.
+		pad("UP",176,400,128,84,game_key,1u<<4);
+		pad("LEFT",38,490,128,84,game_key,1u<<6);
+		pad("RIGHT",314,490,128,84,game_key,1u<<7);
+		pad("DOWN",176,580,128,84,game_key,1u<<5);
+		pad("B: Undo",18,584,144,72,game_key,1u<<0);
+		pad("New game",318,584,144,72,game_key,1u<<3);
+	}else{
+		// R1 portrait layout with larger side-by-side thumb targets.
+		pad("L",12,394,132,52,game_key,1u<<10);pad("R",336,394,132,52,game_key,1u<<11);
+		pad("UP",86,452,76,76,game_key,1u<<4);
+		pad("LEFT",10,528,76,76,game_key,1u<<6);pad("RIGHT",162,528,76,76,game_key,1u<<7);
+		pad("DOWN",86,604,76,76,game_key,1u<<5);
+		// The otherwise empty corners are diagonal touch zones. The raw
+		// reader takes the first matched zone, so these never overlap.
+		const gbinput_zone_t diagonal[]={
+			{10,452,76,76,(1u<<4)|(1u<<6)},{162,452,76,76,(1u<<4)|(1u<<7)},
+			{10,604,76,76,(1u<<5)|(1u<<6)},{162,604,76,76,(1u<<5)|(1u<<7)}
+		};
+		for(unsigned i=0;i<sizeof(diagonal)/sizeof(*diagonal);++i)zones[zone_count++]=diagonal[i];
+		pad("Y",268,452,86,70,game_key,1u<<1);pad("X",368,452,86,70,game_key,1u<<9);
+		pad("B",268,532,86,76,game_key,1u<<0);pad("A",368,532,86,76,game_key,1u<<8);
+		pad("SELECT",254,620,102,56,game_key,1u<<2);pad("START",366,620,102,56,game_key,1u<<3);
+	}
+	pad("Save",12,702,142,64,save_clicked,0);
+	pad("Load",169,702,142,64,load_clicked,0);
+	pad("Exit",326,702,142,64,leave_play,0);
 }
 void gamespage_init(gui_config_t *cfg) {
 	config=cfg;games_list=make_list(gamespage_screen,"Game Launcher");
@@ -219,23 +283,19 @@ void gamespage_init(gui_config_t *cfg) {
 	lv_obj_add_style(play_screen,&theme_style_screen,0);
 	lv_obj_set_scrollable(play_screen,false);
 	lv_obj_set_style_bg_color(play_screen,lv_color_black(),0);
-	picture=lv_image_create(play_screen);lv_obj_align(picture,LV_ALIGN_TOP_MID,0,22);
+	picture=lv_image_create(play_screen);lv_obj_align(picture,LV_ALIGN_TOP_MID,0,12);
 	status=lv_label_create(play_screen);
 	lv_obj_set_width(status,cfg->screen_width-20);
 	lv_obj_set_style_text_color(status,lv_color_white(),0);
 	lv_obj_set_style_text_align(status,LV_TEXT_ALIGN_CENTER,0);
 	lv_label_set_long_mode(status,LV_LABEL_LONG_WRAP);
 	lv_obj_align(status,LV_ALIGN_TOP_MID,0,120);
-	// HiBy R1 portrait layout. Existing raw multitouch provider is shared;
-	// the simulator retains the conventional single-pointer buttons.
-	pad("L",12,394,98,54,game_key,1u<<10);pad("R",370,394,98,54,game_key,1u<<11);
-	pad("UP",85,455,72,66,game_key,1u<<4);
-	pad("LEFT",9,525,72,66,game_key,1u<<6);pad("RIGHT",161,525,72,66,game_key,1u<<7);
-	pad("DOWN",85,595,72,66,game_key,1u<<5);
-	pad("Y",298,455,67,66,game_key,1u<<1);pad("X",375,455,67,66,game_key,1u<<9);
-	pad("B",298,525,67,66,game_key,1u<<0);pad("A",375,525,67,66,game_key,1u<<8);
-	pad("SELECT",249,607,106,54,game_key,1u<<2);pad("START",364,607,106,54,game_key,1u<<3);
-	pad("Save",12,696,142,60,save_clicked,0);pad("Load",169,696,142,60,load_clicked,0);pad("Exit",326,696,142,60,leave_play,0);
+	control_hint=lv_label_create(play_screen);
+	lv_obj_set_width(control_hint,cfg->screen_width-12);
+	lv_obj_set_style_text_align(control_hint,LV_TEXT_ALIGN_CENTER,0);
+	lv_obj_set_style_text_color(control_hint,lv_color_hex(0xc0c7d0),0);
+	lv_obj_set_style_text_font(control_hint,&font_ui_18,0);
+	lv_obj_align(control_hint,LV_ALIGN_TOP_MID,0,376);
 	lv_obj_add_event_cb(play_screen,unloaded,LV_EVENT_SCREEN_UNLOADED,NULL);
 	timer=lv_timer_create(refresh_frame,16,NULL);lv_timer_pause(timer);
 }

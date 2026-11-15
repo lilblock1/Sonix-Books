@@ -824,6 +824,7 @@ void fwupdate_show_extras(void) {
 }
 
 static unsigned selected_store_index;
+static store_ui_t store_appearance;
 static void store_detail(unsigned i);
 static void store_confirm_download(void) {
 	const game_store_item_t *item=ota_store_item(selected_store_index);
@@ -885,46 +886,66 @@ static void store_detail(unsigned i) {
 		set_button(0,"back",false,show_game_catalog);hide_buttons(1);
 	}
 }
+static lv_color_t store_surface(void) {
+	// Presets keep native theme text contrast; no untrusted arbitrary colors.
+	static const uint32_t dark[]={0,0x25384b,0x283e32,0x453723,0x3b2c49};
+	static const uint32_t light[]={0,0xe3edf8,0xe1efe3,0xf6edda,0xeee5f6};
+	unsigned p=(unsigned)store_appearance.palette;
+	return p&&p<sizeof(dark)/sizeof(*dark)?lv_color_hex(theme_is_dark()?dark[p]:light[p]):theme()->surface_pressed;
+}
 static void show_game_catalog(void) {
+	ota_store_ui(&store_appearance);
 	size_t count=ota_store_count();
 	const char *message=store_just_installed?"Installed successfully. Open Game Launcher to play.":
-		count?"Browse games and emulators. Tap for details.":"No packages published yet.";
+		count?store_appearance.subtitle:"No packages published yet.";
 	store_just_installed=false;
-	layout("Game Store",message,count>0,false);
+	layout(store_appearance.heading,message,true,false);
 	lv_obj_clean(notes_content);
+	char ui_info[96];snprintf(ui_info,sizeof(ui_info),"Store design: %s",store_appearance.version);
+	store_label(notes_content,ui_info,&font_ui_18,true);
 	for(int group=GAME_STORE_GAME;group<=GAME_STORE_EMULATOR+1;++group){
-		game_store_kind_t kind=group==GAME_STORE_EMULATOR+1?GAME_STORE_OTHER:(game_store_kind_t)group;
+		game_store_kind_t kind=group==GAME_STORE_EMULATOR+1?GAME_STORE_OTHER:(game_store_kind_t)(store_appearance.emulators_first?3-group:group);
 		bool header=false;
+		lv_obj_t *grid=NULL;
 		for(unsigned i=0;i<count;++i){
 			const game_store_item_t *item=ota_store_item(i);
 			if(!item||item->kind!=kind)continue;
 			if(!header){
 				store_label(notes_content,kind==GAME_STORE_GAME?"GAMES":kind==GAME_STORE_EMULATOR?"EMULATORS":"OTHER",&font_ui_20,true);
 				header=true;
+				if(store_appearance.layout==STORE_UI_GRID){
+					grid=lv_obj_create(notes_content);
+					lv_obj_set_width(grid,lv_pct(100));lv_obj_set_height(grid,LV_SIZE_CONTENT);
+					lv_obj_set_style_bg_opa(grid,0,0);lv_obj_set_style_border_width(grid,0,0);
+					lv_obj_set_style_pad_all(grid,0,0);lv_obj_set_style_pad_gap(grid,store_appearance.gap,0);
+					lv_obj_set_scrollable(grid,false);lv_obj_set_flex_flow(grid,LV_FLEX_FLOW_ROW_WRAP);
+				}
 			}
 			char version[SDPACKAGES_VERSION],size[32],line[128];
 			bool installed=store_installed(item,version);
 			int compare=installed?game_store_version_cmp(item->version,version):1;
 			sysinfo_format_size((uint64_t)item->size,size,sizeof(size));
-			lv_obj_t *tile=lv_btn_create(notes_content);
-			lv_obj_set_width(tile,lv_pct(100));lv_obj_set_height(tile,LV_SIZE_CONTENT);
+			lv_obj_t *tile=lv_btn_create(grid?grid:notes_content);
+			lv_obj_set_width(tile,lv_pct(grid?46:100));lv_obj_set_height(tile,LV_SIZE_CONTENT);
 			lv_obj_add_style(tile,&theme_style_card,0);
 			lv_obj_add_style(tile,&theme_style_card_pressed,LV_STATE_PRESSED);
-			lv_obj_set_style_bg_color(tile,theme()->surface_pressed,0);
-			lv_obj_set_style_radius(tile,12,0);lv_obj_set_style_pad_all(tile,12,0);
-			lv_obj_set_style_pad_row(tile,5,0);
-			lv_obj_set_scrollable(tile,false);lv_obj_set_flex_flow(tile,LV_FLEX_FLOW_ROW);
+			lv_obj_set_style_bg_color(tile,store_surface(),0);
+			lv_obj_set_style_radius(tile,store_appearance.radius,0);lv_obj_set_style_pad_all(tile,store_appearance.padding,0);
+			lv_obj_set_style_pad_row(tile,store_appearance.gap,0);
+			lv_obj_set_scrollable(tile,false);lv_obj_set_flex_flow(tile,store_appearance.layout==STORE_UI_LIST?LV_FLEX_FLOW_ROW:LV_FLEX_FLOW_COLUMN);
 			lv_obj_set_flex_align(tile,LV_FLEX_ALIGN_START,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
 			lv_obj_set_style_pad_column(tile,10,0);
 			lv_obj_add_event_cb(tile,store_detail_clicked,LV_EVENT_CLICKED,(void*)(uintptr_t)i);
-			gamelogo_create(tile,item->id,item->title,item->kind,ota_store_logo(i));
+			gamelogo_create_sized(tile,item->id,item->title,item->kind,ota_store_logo(i),store_appearance.logo_size);
 			lv_obj_t *text=lv_obj_create(tile);
-			lv_obj_set_height(text,LV_SIZE_CONTENT);lv_obj_set_flex_grow(text,1);
+			lv_obj_set_height(text,LV_SIZE_CONTENT);
+			if(store_appearance.layout==STORE_UI_LIST)lv_obj_set_flex_grow(text,1);else lv_obj_set_width(text,lv_pct(100));
 			lv_obj_set_style_bg_opa(text,0,0);lv_obj_set_style_border_width(text,0,0);
 			lv_obj_set_style_pad_all(text,0,0);lv_obj_set_style_pad_row(text,4,0);
 			lv_obj_set_scrollable(text,false);lv_obj_set_clickable(text,false);
 			lv_obj_set_flex_flow(text,LV_FLEX_FLOW_COLUMN);
-			store_label(text,item->title,&font_ui_24_bold,false);
+			store_label(text,item->title,grid?&font_ui_20_bold:&font_ui_24_bold,false);
+			if(store_appearance.show_descriptions&&!grid)store_label(text,item->description,&font_ui_18,true);
 			snprintf(line,sizeof(line),"%s  -  %s",item->version,size);
 			store_label(text,line,&font_ui_20,true);
 			const char *state=!installed?"Ready to install":compare>0?"Update available":"Installed";
@@ -932,7 +953,7 @@ static void show_game_catalog(void) {
 			if(compare>0)lv_obj_set_style_text_color(label,theme()->text_primary,0);
 		}
 	}
-	if(count)fit_notes();
+	fit_notes();
 	set_button(0,"Refresh store",true,fwupdate_show_game_store);
 	set_button(1,"back",false,close_card);hide_buttons(2);
 }

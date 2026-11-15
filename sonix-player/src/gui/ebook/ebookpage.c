@@ -10,7 +10,6 @@
 #include "src/system/ebook/ebooklibrary.h"
 #include "src/system/ebook/ebookhistory.h"
 #include "src/system/ebook/ebookprogress.h"
-#include "src/system/ebook/bookmarks.h"
 #include "src/system/core/config.h"
 #include "src/system/core/lang.h"
 #include "src/system/core/utils.h"
@@ -42,28 +41,29 @@ typedef struct {
 } shelf_entry_t;
 
 static gui_config_t *g_cfg;
-static lv_obj_t *grid, *page_container, *empty_note, *resume_row;
+static lv_obj_t *grid, *page_container, *empty_note, *recent_row;
 static lv_obj_t *field, *breadcrumb, *up_button, *sort_button;
 static keyboard_t *keyboard;
 static lv_timer_t *scan_timer;
 static ebooklibrary_result_t *library;
 static shelf_entry_t *shelf;
-static int resume_index = -1;
 static int cover_w, cover_h, content_top;
 static char root[EBOOKLIBRARY_PATH], folder[EBOOKLIBRARY_PATH], query[256];
 static ebooklibrary_sort_t sort_order;
 static const char *const sort_names[] = {"Title A-Z", "Title Z-A", "Author", "Newest", "Oldest"};
 static uint32_t covers_token;
 static bool active;
+static bool show_recent;
 
 /* One worker for this page, with a replaceable pending request. Rapid queries
  * cancel at the next file, rather than creating a new thread for each tap.
  * LVGL and tile ownership stay exclusively on the UI thread. */
 typedef struct {
 	uint32_t generation;
-	char root[EBOOKLIBRARY_PATH], folder[EBOOKLIBRARY_PATH], query[256], cache[1024], last_key[24];
+	char root[EBOOKLIBRARY_PATH], folder[EBOOKLIBRARY_PATH], query[256], cache[1024];
+	ebookhistory_list_t recent;
 	ebooklibrary_sort_t sort;
-	bool continue_book;
+	bool continue_book, recent_view;
 } scan_request_t;
 
 typedef struct {
@@ -88,11 +88,9 @@ static bool scan_cancelled(void *user) {
 	return *(const uint32_t *)user != atomic_load(&scan_generation);
 }
 
-static bool continue_match(const char *path, void *user) {
+static int recent_rank(const char *path, void *user) {
 	scan_request_t *request = user;
-	char key[24];
-	bookmark_key(path, key, sizeof(key));
-	return request->last_key[0] && !strcmp(key, request->last_key);
+	return ebookhistory_rank(&request->recent, path);
 }
 
 static void *scan_worker(void *unused) {
@@ -108,18 +106,22 @@ static void *scan_worker(void *unused) {
 		if (result) {
 			result->generation = request->generation;
 			result->continue_book = request->continue_book;
-			if (request->continue_book && request->last_key[0]) {
-				ebooklibrary_find(request->root, continue_match, request, result->continue_path, sizeof(result->continue_path), scan_cancelled);
-			} else if (!request->continue_book) {
-				/* Cache failures (including a read-only SD card) are harmless. */
-				char parent[1024];
-				snprintf(parent, sizeof(parent), "%s", request->cache);
-				char *slash = strrchr(parent, '/');
-				if (slash) { *slash = 0; mkdir(parent, 0755); mkdir(request->cache, 0755); }
-				result->books = malloc(sizeof(*result->books));
-				if (result->books) ebooklibrary_scan(request->root, request->folder, request->query,
+			/* Cache failures (including a read-only SD card) are harmless. */
+			char parent[1024];
+			snprintf(parent, sizeof(parent), "%s", request->cache);
+			char *slash = strrchr(parent, '/');
+			if (slash) { *slash = 0; mkdir(parent, 0755); mkdir(request->cache, 0755); }
+			result->books = calloc(1, sizeof(*result->books));
+			if (result->books) {
+				if (request->continue_book || request->recent_view) {
+					if (request->recent.count) ebooklibrary_recent(request->root, recent_rank, request,
+						request->continue_book ? "" : request->query, request->cache, result->books, scan_cancelled);
+					if (request->continue_book && result->books->count)
+						snprintf(result->continue_path, sizeof(result->continue_path), "%s", result->books->entries[0].path);
+				} else ebooklibrary_scan(request->root, request->folder, request->query,
 					request->sort, request->cache, result->books, scan_cancelled, &request->generation);
 			}
+
 			pthread_mutex_lock(&scan_lock);
 			if (!scan_cancelled(&request->generation)) {
 				result_free(completed_scan);
@@ -156,8 +158,7 @@ static void shelf_free(void) {
 	}
 	free(old_shelf);
 	free(old_library);
-	resume_index = -1;
-	lv_obj_set_hidden(resume_row, true);
+	lv_obj_set_hidden(recent_row, true);
 }
 
 static bool near_view(int index) {
@@ -346,13 +347,6 @@ static void build_tiles(void) {
 		lv_obj_set_style_text_font(author, &font_ui_18, 0);
 		lv_obj_set_style_text_align(author, LV_TEXT_ALIGN_CENTER, 0);
 		lv_obj_set_event_bubble(author, true);
-		if (!book->directory && ebookhistory_is_last(book->path)) resume_index = i;
-	}
-	if (resume_index >= 0) {
-		char text[300];
-		snprintf(text, sizeof(text), "Continue: %s", library->entries[resume_index].title);
-		lv_label_set_text(settingsrow_name_label(resume_row), text);
-		lv_obj_set_hidden(resume_row, false);
 	}
 	char (*paths)[800] = calloc((size_t)library->count, sizeof(*paths));
 	if (paths) {
@@ -400,21 +394,31 @@ static void scan_done_cb(lv_timer_t *timer) {
 	if (!library) { lv_label_set_text(empty_note, "Not enough memory to read the library."); return; }
 	if (library->unavailable) lv_label_set_text(empty_note, "Folder unavailable. Check the SD card or use Up.");
 	else if (!library->count) lv_label_set_text(empty_note, library->truncated ?
-		"Search limit reached. Browse a subfolder to find books beyond the limit." :
-		(query[0] ? "No matching books in Ebook or its subfolders." : "No books here. Copy EPUB books or folders into Ebook on the SD card."));
+		(show_recent ? "Scan limit reached. Some recent books may be outside the scanned folders." :
+		"Search limit reached. Browse a subfolder to find books beyond the limit.") :
+		(show_recent ? (query[0] ? "No matching recently read books." : "No recently read books on this card yet. Open a book from the library.") :
+		(query[0] ? "No matching books in Ebook or its subfolders." : "No books here. Copy EPUB books or folders into Ebook on the SD card.")));
 	else {
 		lv_obj_set_hidden(empty_note, !library->truncated && !library->unreadable);
-		lv_label_set_text(empty_note, library->truncated ? "Library limit reached. Showing up to 300 results; browse a subfolder or narrow your search." : "Some folders could not be read.");
+		lv_label_set_text(empty_note, library->truncated ?
+			(show_recent ? "Scan limit reached. Some recent books may be outside the scanned folders." :
+			"Library limit reached. Showing up to 300 results; browse a subfolder or narrow your search.") : "Some folders could not be read.");
 		build_tiles();
 	}
 }
 
 static void refresh_nav(void) {
 	char text[900];
-	snprintf(text, sizeof(text), "%s%s", query[0] ? "Search all Ebook folders" : "Ebook", !query[0] && folder[0] ? "/" : "");
-	if (!query[0] && folder[0]) strncat(text, folder, sizeof(text) - strlen(text) - 1);
+	if (show_recent) snprintf(text, sizeof(text), "%s", query[0] ? "Search recently read" : "Recently read");
+	else {
+		snprintf(text, sizeof(text), "%s%s", query[0] ? "Search all Ebook folders" : "Ebook", !query[0] && folder[0] ? "/" : "");
+		if (!query[0] && folder[0]) strncat(text, folder, sizeof(text) - strlen(text) - 1);
+	}
 	lv_label_set_text(breadcrumb, text);
-	lv_obj_set_hidden(up_button, !query[0] && !folder[0]);
+	lv_obj_set_hidden(up_button, !show_recent && !query[0] && !folder[0]);
+	lv_obj_set_hidden(sort_button, show_recent);
+	lv_label_set_text(settingsrow_name_label(recent_row), show_recent ? "Back to library" : "Recently read");
+	lv_textarea_set_placeholder_text(field, show_recent ? "Title or author (recent books)" : "Title or author (all folders)");
 }
 
 static void scan_begin(bool continue_book) {
@@ -425,7 +429,9 @@ static void scan_begin(bool continue_book) {
 	lv_obj_scroll_to_y(page_container, 0, LV_ANIM_OFF);
 	lv_obj_set_hidden(empty_note, false);
 	if (!gui_card_available()) { lv_label_set_text(empty_note, tr("books_card_unavailable")); return; }
-	lv_label_set_text(empty_note, continue_book ? "Finding your last book..." : "Reading book titles and authors...");
+	lv_obj_set_hidden(recent_row, continue_book);
+	lv_label_set_text(empty_note, continue_book ? "Finding your last book..." :
+		(show_recent ? "Finding recently read books..." : "Reading book titles and authors..."));
 	if (!scan_worker_started) {
 		pthread_t worker;
 		if (pthread_create(&worker, NULL, scan_worker, NULL) != 0) {
@@ -440,7 +446,8 @@ static void scan_begin(bool continue_book) {
 	request->generation = atomic_load(&scan_generation);
 	request->sort = sort_order;
 	request->continue_book = continue_book;
-	snprintf(request->last_key, sizeof(request->last_key), "%s", config_store_get(config_ebook_store(), "ebook", "last_book", ""));
+	request->recent_view = show_recent;
+	ebookhistory_read(&request->recent);
 	snprintf(request->root, sizeof(request->root), "%s", root);
 	snprintf(request->folder, sizeof(request->folder), "%s", folder);
 	snprintf(request->query, sizeof(request->query), "%s", query);
@@ -473,7 +480,8 @@ static void clear_cb(lv_event_t *e) {
 static void up_cb(lv_event_t *e) {
 	(void)e;
 	if (player_sheet_drag_active() || switcher_back_drag_active()) return;
-	if (query[0]) { query[0] = 0; lv_textarea_set_text(field, ""); }
+	if (show_recent) { show_recent = false; query[0] = 0; lv_textarea_set_text(field, ""); }
+	else if (query[0]) { query[0] = 0; lv_textarea_set_text(field, ""); }
 	else { char *slash = strrchr(folder, '/'); if (slash) *slash = 0; else folder[0] = 0; }
 	keyboard_show(false);
 	scan_begin(false);
@@ -494,15 +502,14 @@ static void sort_cb(lv_event_t *e) {
 		.label = sort_names[i], .action = sort_choose, .user = (void *)(intptr_t)i, .checked = (int)sort_order == i};
 	popover_show(sort_button, items, EBOOKLIBRARY_SORT_COUNT);
 }
-static void resume_cb(lv_event_t *e) {
+static void recent_cb(lv_event_t *e) {
 	(void)e;
-	if (resume_index < 0) return;
-	/* open_book_cb copies the path before changing screens. */
-	if (player_sheet_drag_active() || switcher_back_drag_active() || !library) return;
-	if (!gui_card_available()) { gui_notify_no_card(); return; }
-	char book_path[EBOOKLIBRARY_PATH];
-	snprintf(book_path, sizeof(book_path), "%s", library->entries[resume_index].path);
-	ebookreader_open(book_path);
+	if (player_sheet_drag_active() || switcher_back_drag_active()) return;
+	show_recent = !show_recent;
+	query[0] = 0;
+	lv_textarea_set_text(field, "");
+	keyboard_show(false);
+	scan_begin(false);
 }
 static void settings_cb(lv_event_t *e) {
 	(void)e; if (!player_sheet_drag_active() && !switcher_back_drag_active()) switch_screen(ebooksettings_screen);
@@ -601,10 +608,10 @@ void ebookpage_init(gui_config_t *cfg) {
 	lv_obj_set_style_pad_row(page_container, TILE_GAP, 0);
 	lv_obj_add_event_cb(page_container, scrolled_cb, LV_EVENT_SCROLL, NULL);
 	lv_obj_add_event_cb(page_container, scrolled_cb, LV_EVENT_SCROLL_END, NULL);
-	resume_row = settingsrow_action(page_container, "", resume_cb, NULL);
-	settingsrow_name_lines(resume_row, 1);
-	lv_obj_set_height(resume_row, 60);
-	lv_obj_set_hidden(resume_row, true);
+	recent_row = settingsrow_action(page_container, "Recently read", recent_cb, NULL);
+	settingsrow_name_lines(recent_row, 1);
+	lv_obj_set_height(recent_row, 60);
+	lv_obj_set_hidden(recent_row, true);
 	empty_note = lv_label_create(page_container);
 	lv_obj_set_width(empty_note, lv_pct(100));
 	lv_label_set_long_mode(empty_note, LV_LABEL_LONG_WRAP);

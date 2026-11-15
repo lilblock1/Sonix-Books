@@ -66,6 +66,16 @@ jobs:
             src/system/ebook/bookmarks.c src/system/core/config.c \
             -o build_tests/test_ebookhistory
           ./build_tests/test_ebookhistory
+      - name: Test recent-book ordering and persistence
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. \
+            tests/test_ebookrecents.c src/system/ebook/ebookhistory.c \
+            src/system/ebook/bookmarks.c src/system/core/config.c \
+            -o build_tests/test_ebookrecents
+          fixture=$(mktemp -d)
+          trap 'rm -rf -- "$fixture"' EXIT
+          ./build_tests/test_ebookrecents "$fixture"
       - name: Test library search, folders, sorting and metadata cache
         working-directory: sonix-player
         run: |

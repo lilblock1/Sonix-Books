@@ -25,6 +25,7 @@ typedef struct {
 	char author[128];
 	int64_t modified;
 	bool directory;
+	int recent_rank; /* used only by the Recently Read view */
 } ebooklibrary_entry_t;
 
 typedef struct {
@@ -47,6 +48,15 @@ typedef bool (*ebooklibrary_cancel_cb)(void *user);
 void ebooklibrary_scan(const char *root, const char *folder, const char *query,
 					   ebooklibrary_sort_t sort, const char *cache_dir,
 					   ebooklibrary_result_t *out, ebooklibrary_cancel_cb cancel, void *user);
+
+/* Recursively resolve remembered books on this card. rank returns -1 for
+ * unremembered paths, otherwise their most-recent-first rank. Metadata is read
+ * only for matches. rank and cancel receive the same immutable user snapshot.
+ * Query filters these books without changing their recent order.
+ */
+void ebooklibrary_recent(const char *root, int (*rank)(const char *, void *), void *user,
+						 const char *query, const char *cache_dir, ebooklibrary_result_t *out,
+						 ebooklibrary_cancel_cb cancel);
 
 /* Same traversal rules, without parsing metadata. Used by Continue Reading. */
 bool ebooklibrary_find(const char *root, bool (*match)(const char *, void *), void *user,

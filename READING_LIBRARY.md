@@ -1,4 +1,4 @@
-# Reading library — items 1 and 2
+# Reading library — items 1–3
 
 Source work on `reading-overhaul`; no firmware update has been built or
 published for this feature. Keep the tested `main` firmware until the complete
@@ -46,6 +46,32 @@ the existing position-save/flush points. The three-number prefix also remains
 readable by the old reader. Cover badges read only the in-memory config;
 they do not parse chapters, start timers, or read book content from the card.
 
+## Recently Read — item 3
+
+Tap **Recently read** at the top of the library to switch to the 12 most
+recently opened books, ordered newest first. Reopening a book moves it to the
+front without duplicates. Its cover, reading badge and saved position work
+as in the main library. **Back to library** or **Up** returns to the folder you
+were browsing. Closing the reader returns to the same view and refreshes it.
+
+Search in this view filters recent titles, authors and filenames while keeping
+recent order; **Clear** removes the filter. The regular sort control is hidden
+here and retains its previous choice for the main library. An empty recent
+view has a direct way back to browse books.
+
+Home's **Continue Reading** opens the first available recent book on the
+current card, including subfolders. Missing files are hidden from the view;
+their hashes remain remembered so that temporarily removing a card does not
+erase history. No file path loaded from the settings is opened directly.
+Resolution uses the same bounded traversal and symlink rules as library search.
+
+History uses two fixed config values containing short path hashes and retains
+legacy last_book for compatibility. An existing last_book is migrated into the
+list; using an older firmware and returning also preserves its last selection.
+No clock, per-book timestamps, background polling, or extra page-turn writes
+are needed. Config is read only on the UI thread; the worker gets an immutable
+history snapshot and parses metadata only for remembered files.
+
 ## Resource limits
 
 The R1 has 64 MB RAM. Scans run on one background worker, cancel between files,
@@ -66,6 +92,17 @@ leave its lookahead area, and can be requested again on return.
 
 Local checks completed:
 
+- Existing reading-history regression tests also passed locally with Windows
+  filesystem adapters (including paths longer than the config value limit).
+- Recent-history tests: ordering across save/reload, reopening and deduplication,
+  the 12-book cap, two fixed storage values, migration from last_book, independent
+  nested paths, immutable worker snapshots, long filenames and malformed data.
+  Native Windows tests retry dirty writes after removing the test config to
+  account for CRT rename semantics; the deployed config writer is unchanged.
+- Library tests also cover recent order, filtering, cancellation, skipping absent
+  files, selecting the first available recent file, and reading metadata only
+  for remembered books.
+
 - Progress tests: New/Reading/Finished transitions; save/reload; preservation of
   legacy positions and settings; compatible position prefixes; independent
   nested and long paths; completion/rewind behavior; malformed extensions and
@@ -85,9 +122,9 @@ Local checks completed:
   firmware build. Local MIPS libc headers were unavailable; the actual
   toolchain/link/size checks remain for the combined build.
 
-The progress module, reader and shelf also compiled individually against the
+The progress/history modules, reader, library scanner and shelf also compiled individually against the
 Linux headers with warnings treated as errors. No linked player, firmware
-update, release or version change was made for either item.
+update, release or version change was made for these items.
 
 The POSIX symlink cases are included in the scanner tests for the future Linux
 checks. They were not executed by the native Windows test run. On-device
@@ -118,6 +155,18 @@ trap 'rm -rf -- "$fixture"' EXIT
 ./build_tests/test_ebookprogress "$fixture"
 ```
 
-The existing checks workflow will run this test when it is eventually invoked
+Run recent-history tests from sonix-player on Linux:
+
+~~~sh
+gcc -std=c11 -Wall -Wextra -Werror -I. \
+  tests/test_ebookrecents.c src/system/ebook/ebookhistory.c \
+  src/system/ebook/bookmarks.c src/system/core/config.c \
+  -o build_tests/test_ebookrecents
+fixture=$(mktemp -d)
+trap 'rm -rf -- "$fixture"' EXIT
+./build_tests/test_ebookrecents "$fixture"
+~~~
+
+The existing checks workflow will run these tests when it is eventually invoked
 on a supported branch. Pushing `reading-overhaul` does not match its push
 triggers and does not build an update.

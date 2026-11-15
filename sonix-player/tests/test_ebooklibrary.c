@@ -60,6 +60,11 @@ static int index_of(ebooklibrary_result_t *r, const char *title) {
 }
 static bool cancel_now(void *user) { (void)user; return true; }
 static bool match_path(const char *path, void *user) { return strstr(path, user) != NULL; }
+static int recent_rank(const char *path, void *user) {
+	const char *const *paths = user;
+	for (int i = 0; paths[i]; i++) if (strstr(path, paths[i])) return i;
+	return -1;
+}
 
 int main(int argc, char **argv) {
 	assert(argc == 2); /* caller supplies a fresh temporary folder */
@@ -147,6 +152,28 @@ int main(int argc, char **argv) {
 	assert(strstr(found, "/Novels/Series/third.epub") && opens == first);
 	assert(!ebooklibrary_find(root, match_path, "third.epub", found, 4, NULL) && !found[0]);
 	assert(!ebooklibrary_find(root, match_path, "third.epub", found, sizeof(found), cancel_now));
+
+	/* MRU resolution reads metadata only for remembered files and preserves
+	 * recent order rather than alphabetical or directory iteration order. */
+	const char *recent_paths[] = {"/Novels/Series/third.epub", "/z-file.epub", "/missing.epub", NULL};
+	first = opens;
+	ebooklibrary_recent(root, recent_rank, recent_paths, "", NULL, r, NULL);
+	assert(r->count == 2 && !r->unavailable && opens == first + 2);
+	assert(strstr(r->entries[0].path, "/Novels/Series/third.epub"));
+	assert(r->entries[0].recent_rank == 0 && r->entries[1].recent_rank == 1);
+	ebooklibrary_recent(root, recent_rank, recent_paths, "different writer", NULL, r, NULL);
+	assert(r->count == 1 && r->entries[0].recent_rank == 1);
+	ebooklibrary_recent(root, recent_rank, recent_paths, "no match", NULL, r, NULL);
+	assert(r->count == 0 && !r->unavailable);
+	first = opens;
+	ebooklibrary_recent(root, recent_rank, recent_paths, "", NULL, r, cancel_now);
+	assert(r->cancelled && opens == first);
+	ebooklibrary_recent(root, NULL, NULL, "", NULL, r, NULL);
+	assert(r->unavailable && !r->count);
+	char removed[EBOOKLIBRARY_PATH]; join(removed, deeper, "third.epub");
+	assert(remove(removed) == 0);
+	ebooklibrary_recent(root, recent_rank, recent_paths, "", NULL, r, NULL);
+	assert(r->count == 1 && r->entries[0].recent_rank == 1); /* continue with first available */
 
 #ifndef _WIN32
 	/* Neither global search nor directly entering a symlink may leave Ebook. */

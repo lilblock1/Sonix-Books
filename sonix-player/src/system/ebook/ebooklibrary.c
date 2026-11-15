@@ -14,6 +14,9 @@
 
 #include "ebook.h"
 
+/* Internal ordering; the five user-selectable library sorts stay unchanged. */
+#define SORT_RECENT ((ebooklibrary_sort_t)EBOOKLIBRARY_SORT_COUNT)
+
 static bool ordinary_stat(const char *path, struct stat *st) {
 #ifdef _WIN32
 	DWORD attrs = GetFileAttributesA(path);
@@ -86,6 +89,8 @@ static bool contains(const char *text, const char *query) {
 
 static int compare(const ebooklibrary_entry_t *a, const ebooklibrary_entry_t *b, ebooklibrary_sort_t sort) {
 	if (a->directory != b->directory) return a->directory ? -1 : 1;
+	if (sort == SORT_RECENT && a->recent_rank != b->recent_rank)
+		return a->recent_rank < b->recent_rank ? -1 : 1;
 	int c = 0;
 	if (!a->directory) {
 		if (sort == EBOOKLIBRARY_AUTHOR) {
@@ -204,6 +209,7 @@ typedef struct {
 	unsigned visits;
 	bool recursive;
 	bool (*match)(const char *, void *);
+	int (*rank)(const char *, void *);
 	char *found;
 	unsigned found_size;
 } scan_t;
@@ -239,6 +245,10 @@ static void walk(scan_t *s, const char *folder, unsigned depth) {
 			if (s->match) {
 				if (s->match(entry.path, s->user) && strlen(entry.path) < s->found_size) strcpy(s->found, entry.path);
 				continue;
+			}
+			if (s->rank) {
+				entry.recent_rank = s->rank(entry.path, s->user);
+				if (entry.recent_rank < 0) continue;
 			}
 			size_t len = strlen(entry.title);
 			if (len > 5 && epub_name(entry.title)) entry.title[len - 5] = 0;
@@ -289,6 +299,20 @@ void ebooklibrary_scan(const char *root, const char *folder, const char *query, 
 		.cancel = cancel, .user = user, .recursive = recursive};
 	walk(&scan, dir, 0);
 	sort_results(out, sort);
+	if (out->unreadable && !out->count) out->unavailable = true;
+}
+
+void ebooklibrary_recent(const char *root, int (*rank)(const char *, void *), void *user,
+						 const char *query, const char *cache_dir, ebooklibrary_result_t *out,
+						 ebooklibrary_cancel_cb cancel) {
+	if (!out) return;
+	memset(out, 0, sizeof(*out));
+	char dir[EBOOKLIBRARY_PATH];
+	if (!rank || !resolve(root, "", dir)) { out->unavailable = true; return; }
+	scan_t scan = {.query = query ? query : "", .cache_dir = cache_dir, .sort = SORT_RECENT,
+		.out = out, .cancel = cancel, .user = user, .recursive = true, .rank = rank};
+	walk(&scan, dir, 0);
+	sort_results(out, SORT_RECENT);
 	if (out->unreadable && !out->count) out->unavailable = true;
 }
 

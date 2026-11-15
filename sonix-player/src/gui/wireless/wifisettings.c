@@ -681,6 +681,7 @@ static void switched_elsewhere_cb(lv_event_t *e) {
 
 static void screen_loaded_cb(lv_event_t *e) {
 	(void)e;
+	wifi_set_settings_visible(true);
 	drawn_serial = 0xFFFFFFFFu;
 	lv_timer_resume(poll_timer);
 	lv_timer_ready(poll_timer);
@@ -694,6 +695,7 @@ static void screen_loaded_cb(lv_event_t *e) {
 
 static void screen_unloaded_cb(lv_event_t *e) {
 	(void)e;
+	wifi_set_settings_visible(false);
 	lv_timer_pause(poll_timer);
 }
 

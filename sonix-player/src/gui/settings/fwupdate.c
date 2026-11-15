@@ -8,6 +8,9 @@
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/theme.h"
+#include "src/gui/shell/settingsrow.h"
+#include "src/system/core/config.h"
+#include "src/system/device/sdpackages.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/firmware.h"
 #include "src/system/device/ota.h"
@@ -48,7 +51,9 @@ static action_fn button_actions[BUTTONS];
 static lv_timer_t *poll_timer;
 static bool holding_screen;
 
-static enum { PHASE_NONE, PHASE_CHECK, PHASE_DOWNLOAD } phase;
+static enum { PHASE_NONE, PHASE_CHECK, PHASE_DOWNLOAD, PHASE_EXTRAS } phase;
+static lv_obj_t *extra_switch[SD_EXTRAS_COUNT];
+static const char *const EXTRA_LABELS[SD_EXTRAS_COUNT] = {"Reading fonts", "Offline dictionary", "Document formats"};
 
 static char notes_line[4096];
 
@@ -628,7 +633,8 @@ static void download_finished(ota_result_t r) {
 static void poll_cb(lv_timer_t *timer) {
 	(void)timer;
 	ota_state_t s = ota_state();
-	if (s == OTA_DOWNLOADING && phase == PHASE_DOWNLOAD) {
+	if (s == OTA_DOWNLOADING && (phase == PHASE_DOWNLOAD || phase == PHASE_EXTRAS)) {
+		if (phase == PHASE_EXTRAS) layout("Downloadable Extras", "Downloading and verifying", false, true);
 		show_progress();
 		return;
 	}
@@ -646,6 +652,14 @@ static void poll_cb(lv_timer_t *timer) {
 		check_finished(r);
 	} else if (finished == PHASE_DOWNLOAD) {
 		download_finished(r);
+	} else if (finished == PHASE_EXTRAS) {
+		const char *message = r == OTA_OK ? "Selected extras installed and verified on microSD. Open or reopen your books to use them." :
+			r == OTA_EXTRAS_UNAVAILABLE ? "Individual extras are not available for this firmware version." :
+			r == OTA_NO_NETWORK ? tr("system_update_no_wifi") : r == OTA_NO_CARD ? tr("system_no_card") :
+			r == OTA_NO_SPACE ? tr("system_update_no_space") : r == OTA_CORRUPT ? tr("system_update_corrupt") :
+			r == OTA_CANCELLED ? "Download cancelled" : tr("system_update_download_failed");
+		show_notice(message);
+		lv_label_set_text(title_label, "Downloadable Extras");
 	}
 }
 
@@ -710,11 +724,56 @@ static void show_choice(void) {
 }
 
 void fwupdate_show(void) {
+	if (ota_busy()) { gui_notify_popup("system_update_busy"); return; }
 	if (!veil) {
 		build();
 	}
 	phase = PHASE_NONE;
 	show_choice();
+	lv_obj_set_hidden(veil, false);
+	lv_obj_move_foreground(veil);
+	if (!holding_screen) {
+		holding_screen = true;
+		power_hold_screen_on(true);
+	}
+}
+
+static void download_extras_clicked(void) {
+	unsigned mask = 0;
+	for (unsigned i = 0; i < SD_EXTRAS_COUNT; ++i)
+		if (lv_obj_has_state(extra_switch[i], LV_STATE_CHECKED)) mask |= 1u << i;
+	if (!mask) { lv_label_set_text(message_label, "Select at least one extra."); return; }
+	if (!storage_card_attached() || !storage_sd_writable()) {
+		lv_label_set_text(message_label, "Insert a writable microSD card."); return;
+	}
+	if (!ota_extras_start(mask)) { lv_label_set_text(message_label, tr("system_update_busy")); return; }
+	config_set_int("extras", "selected", mask);
+	config_save();
+	phase = PHASE_EXTRAS;
+	layout("Downloadable Extras", "Finding packages for this firmware...", false, false);
+	set_button(0, "cancel", false, cancel_running);
+	hide_buttons(1);
+	start_polling();
+}
+
+void fwupdate_show_extras(void) {
+	if (ota_busy()) { gui_notify_popup("system_update_busy"); return; }
+	if (!veil) build();
+	phase = PHASE_NONE;
+	layout("Downloadable Extras", "Choose what to download. Installs only on microSD; no firmware flash.", true, false);
+	lv_obj_clean(notes_content);
+	unsigned mask = (unsigned)config_get_int("extras", "selected", SD_EXTRAS_MASK) & SD_EXTRAS_MASK;
+	for (unsigned i = 0; i < SD_EXTRAS_COUNT; ++i) {
+		settingsrow_toggle(notes_content, EXTRA_LABELS[i], &extra_switch[i], NULL);
+		if (mask & (1u << i)) lv_obj_add_state(extra_switch[i], LV_STATE_CHECKED);
+		char folder[1200];
+		const char *status = storage_card_attached() && sdpackages_path(storage_sd_root(), sdpackages_extra_folder(i), folder, sizeof(folder)) ? "Available on SD" : "Not installed";
+		notes_text_label(notes_content, status, &font_ui_20);
+	}
+	fit_notes();
+	set_button(0, "Download selected", true, download_extras_clicked);
+	set_button(1, "cancel", false, close_card);
+	hide_buttons(2);
 	lv_obj_set_hidden(veil, false);
 	lv_obj_move_foreground(veil);
 	if (!holding_screen) {

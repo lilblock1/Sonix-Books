@@ -11,6 +11,7 @@
 #include "src/gui/shell/settingsrow.h"
 #include "src/system/core/config.h"
 #include "src/system/device/sdpackages.h"
+#include "src/system/net/wifi.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/firmware.h"
 #include "src/system/device/ota.h"
@@ -52,7 +53,7 @@ static lv_timer_t *poll_timer;
 static bool holding_screen;
 
 static enum { PHASE_NONE, PHASE_CHECK, PHASE_DOWNLOAD, PHASE_EXTRAS } phase;
-static lv_obj_t *extra_switch[SD_EXTRAS_COUNT];
+static lv_obj_t *extra_switch[SD_EXTRAS_COUNT], *extras_auto_switch;
 static const char *const EXTRA_LABELS[SD_EXTRAS_COUNT] = {"Reading fonts", "Offline dictionary", "Document formats"};
 
 static char notes_line[4096];
@@ -738,22 +739,35 @@ void fwupdate_show(void) {
 	}
 }
 
-static void download_extras_clicked(void) {
+static unsigned selected_extras(void) {
 	unsigned mask = 0;
 	for (unsigned i = 0; i < SD_EXTRAS_COUNT; ++i)
-		if (lv_obj_has_state(extra_switch[i], LV_STATE_CHECKED)) mask |= 1u << i;
+		if (extra_switch[i] && lv_obj_has_state(extra_switch[i], LV_STATE_CHECKED)) mask |= 1u << i;
+	return mask;
+}
+
+static void extras_preferences_changed(lv_event_t *e) {
+	(void)e;
+	config_set_int("extras", "selected", selected_extras());
+	config_set_bool("extras", "auto_on_open", lv_obj_has_state(extras_auto_switch, LV_STATE_CHECKED));
+	config_save();
+}
+
+static void start_extras_download(unsigned mask) {
 	if (!mask) { lv_label_set_text(message_label, "Select at least one extra."); return; }
 	if (!storage_card_attached() || !storage_sd_writable()) {
 		lv_label_set_text(message_label, "Insert a writable microSD card."); return;
 	}
 	if (!ota_extras_start(mask)) { lv_label_set_text(message_label, tr("system_update_busy")); return; }
-	config_set_int("extras", "selected", mask);
-	config_save();
 	phase = PHASE_EXTRAS;
 	layout("Downloadable Extras", "Finding packages for this firmware...", false, false);
 	set_button(0, "cancel", false, cancel_running);
 	hide_buttons(1);
 	start_polling();
+}
+
+static void download_extras_clicked(void) {
+	start_extras_download(selected_extras());
 }
 
 void fwupdate_show_extras(void) {
@@ -764,12 +778,18 @@ void fwupdate_show_extras(void) {
 	lv_obj_clean(notes_content);
 	unsigned mask = (unsigned)config_get_int("extras", "selected", SD_EXTRAS_MASK) & SD_EXTRAS_MASK;
 	for (unsigned i = 0; i < SD_EXTRAS_COUNT; ++i) {
-		settingsrow_toggle(notes_content, EXTRA_LABELS[i], &extra_switch[i], NULL);
+		settingsrow_toggle(notes_content, EXTRA_LABELS[i], &extra_switch[i], extras_preferences_changed);
 		if (mask & (1u << i)) lv_obj_add_state(extra_switch[i], LV_STATE_CHECKED);
-		char folder[1200];
-		const char *status = storage_card_attached() && sdpackages_path(storage_sd_root(), sdpackages_extra_folder(i), folder, sizeof(folder)) ? "Available on SD" : "Not installed";
+		char version[SDPACKAGES_VERSION], status[110];
+		if (storage_card_attached() && sdpackages_component_version(storage_sd_root(), i, version))
+			snprintf(status, sizeof(status), "%s: %s", ota_extras_missing(1u << i) ? "Installed, update available for firmware" : "Installed", version);
+		else snprintf(status, sizeof(status), "Not installed (managed pack)");
 		notes_text_label(notes_content, status, &font_ui_20);
 	}
+	settingsrow_toggle(notes_content, "Auto download on open", &extras_auto_switch, extras_preferences_changed);
+	bool automatic = config_get_bool("extras", "auto_on_open", false);
+	if (automatic) lv_obj_add_state(extras_auto_switch, LV_STATE_CHECKED);
+	notes_text_label(notes_content, "Auto mode downloads missing or outdated selected extras when this menu opens with Wi-Fi connected. It never wakes Wi-Fi.", &font_ui_20);
 	fit_notes();
 	set_button(0, "Download selected", true, download_extras_clicked);
 	set_button(1, "cancel", false, close_card);
@@ -780,4 +800,10 @@ void fwupdate_show_extras(void) {
 		holding_screen = true;
 		power_hold_screen_on(true);
 	}
+	// A visible, cancellable opt-in only. No boot task, polling or forced radio.
+	char ip[40];
+	unsigned missing = ota_extras_missing(mask);
+	if (automatic && missing && storage_card_attached() && storage_sd_writable() &&
+		wifi_get_enabled() && wifi_interface_address(ip, sizeof(ip)))
+		start_extras_download(missing);
 }

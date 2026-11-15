@@ -1747,7 +1747,8 @@ static void slide_in(int direction) {
 // bookmark, the book being opened. Only the slide cares, and only a move has a
 // direction to slide in.
 static void present(int direction) {
-	if (turn_mode() != TURN_SLIDE || direction == 0) {
+	power_notify_activity();
+	if (turn_mode() != TURN_SLIDE || direction == 0 || power_instant_reading_turns()) {
 		show_page();
 		return;
 	}

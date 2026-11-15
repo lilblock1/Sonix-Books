@@ -1557,6 +1557,13 @@ void power_set_display_options(bool adaptive, bool reading_dim, bool instant_tur
 bool power_instant_reading_turns(void) { return g_instant_reading_turns; }
 
 bool power_update_display_policy(void) {
+	// Only notify the waveform worker on changes, not each UI iteration.
+	static bool wave_visible;
+	bool visible = g_screen_on && player_waveform_visible();
+	if (visible != wave_visible) {
+		wave_visible = visible;
+		waveform_set_visible(visible);
+	}
 	if (!g_screen_on || !g_disp || !g_refr_timer) return false;
 	lv_obj_t *screen = lv_screen_active();
 	bool reading = g_offline_reading && screen && screen == ebookreader_screen;

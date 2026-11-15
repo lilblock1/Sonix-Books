@@ -65,6 +65,7 @@ typedef struct {
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake;
 static bool started;
+static bool initialized;
 
 static const char *api_key;
 static const char *api_secret;
@@ -1118,8 +1119,22 @@ static void *worker_main(void *arg) {
 // the public side
 // ---------------------------------------------------------------------------
 
+// lock held: start once, when the feature actually has work to do.
+static bool start_worker_locked(void) {
+	if (started) return true;
+	if (!api_key || !api_secret) return false;
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, worker_main, NULL) != 0) {
+		fprintf(stderr, "lastfm: cannot start the worker\n");
+		return false;
+	}
+	pthread_detach(thread);
+	started = true;
+	return true;
+}
+
 void lastfm_init(void) {
-	if (started) {
+	if (initialized) {
 		return;
 	}
 	api_key = streamkeys_lastfm_key();
@@ -1136,49 +1151,42 @@ void lastfm_init(void) {
 	enabled = config_get_bool("lastfm", "enabled", false);
 	load_session();
 	session_expired = !session_key[0] && user[0];
+	initialized = true;
+	if (counting_locked()) start_worker_locked();
 	pthread_mutex_unlock(&lock);
-
-	if (!api_key || !api_secret) {
-		printf("lastfm: no API keys; Last.fm stays off\n");
-		return;
-	}
-
-	pthread_t thread;
-	if (pthread_create(&thread, NULL, worker_main, NULL) != 0) {
-		fprintf(stderr, "lastfm: cannot start the worker\n");
-		return;
-	}
-	pthread_detach(thread);
-	started = true;
-	printf("lastfm: %s, %s\n", enabled ? "on" : "off", session_key[0] ? "signed in" : "signed out");
 }
 
-bool lastfm_available(void) { return started; }
+bool lastfm_available(void) { return initialized && api_key && api_secret; }
 
 void lastfm_set_enabled(bool on) {
 	config_set_bool("lastfm", "enabled", on);
 	config_save();
 	pthread_mutex_lock(&lock);
 	enabled = on;
-	pthread_cond_signal(&wake);
+	if (counting_locked()) start_worker_locked();
+	if (started) pthread_cond_signal(&wake);
 	pthread_mutex_unlock(&lock);
 }
 
 bool lastfm_active(void) {
-	if (!started) {
-		return false;
-	}
 	pthread_mutex_lock(&lock);
-	bool counting = counting_locked();
+	bool counting = started && counting_locked();
 	pthread_mutex_unlock(&lock);
 	return counting;
 }
 
 void lastfm_login(const char *name, const char *password) {
-	if (!started || !name || !name[0] || !password || !password[0]) {
+	if (!lastfm_available() || !name || !name[0] || !password || !password[0]) {
 		return;
 	}
 	pthread_mutex_lock(&lock);
+	if (!start_worker_locked()) {
+		login_result = LASTFM_LOGIN_NO_REPLY;
+		++login_serial;
+		snprintf(detail, sizeof(detail), "Could not start the Last.fm worker");
+		pthread_mutex_unlock(&lock);
+		return;
+	}
 	if (!logging_in) {
 		snprintf(login_user, sizeof(login_user), "%s", name);
 		snprintf(login_password, sizeof(login_password), "%s", password);
@@ -1190,10 +1198,12 @@ void lastfm_login(const char *name, const char *password) {
 }
 
 void lastfm_logout(void) {
-	if (!started) {
+	if (!lastfm_available()) return;
+	pthread_mutex_lock(&lock);
+	if (!start_worker_locked()) {
+		pthread_mutex_unlock(&lock);
 		return;
 	}
-	pthread_mutex_lock(&lock);
 	logout_requested = true;
 	session_key[0] = '\0';
 	session_expired = false;
@@ -1210,7 +1220,7 @@ void lastfm_get_status(lastfm_status_t *out) {
 	out->queued = file_count + pending_count;
 	out->login_serial = login_serial;
 	out->login_result = login_result;
-	if (!started) {
+	if (!lastfm_available()) {
 		out->state = LASTFM_STATE_UNAVAILABLE;
 	} else if (logging_in) {
 		out->state = LASTFM_STATE_SIGNING_IN;

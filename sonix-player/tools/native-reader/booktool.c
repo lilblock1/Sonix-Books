@@ -158,8 +158,12 @@ static fz_buffer *rtf_html(fz_context *ctx, const char *path) {
 				if (!strcmp(word, "u")) {
 					unsigned u = (unsigned)(uint16_t)value;
 					if (u >= 0xd800 && u <= 0xdbff) high = (int)u;
-					else { if (high && u >= 0xdc00 && u <= 0xdfff) u = 0x10000u + ((unsigned)high - 0xd800u) * 1024u + u - 0xdc00u;
-						else if (high) rune(ctx, out, 0xfffd); high = 0; rune(ctx, out, u >= 0xd800 && u <= 0xdfff ? 0xfffd : (int)u); }
+					else {
+						if (high && u >= 0xdc00 && u <= 0xdfff) u = 0x10000u + ((unsigned)high - 0xd800u) * 1024u + u - 0xdc00u;
+						else if (high) rune(ctx, out, 0xfffd);
+						high = 0;
+						rune(ctx, out, u >= 0xd800 && u <= 0xdfff ? 0xfffd : (int)u);
+					}
 					skip = state.uc;
 				} else if (!strcmp(word, "par") || !strcmp(word, "line")) append(ctx, out, "</p><p>");
 				else if (!strcmp(word, "tab")) append(ctx, out, " ");
@@ -247,7 +251,7 @@ int main(int argc, char **argv) {
 		if (reflow) fz_layout_document(ctx, doc, 400, 600, 20);
 		else flags |= BOOKTOOL_FIXED;
 		int count = fz_count_pages(ctx, doc);
-		if (count < 1 || count > BOOKTOOL_PAGES_MAX) fz_throw(ctx, FZ_ERROR_LIMIT, "page count limit");
+		if (count < 1 || (unsigned)count > BOOKTOOL_PAGES_MAX) fz_throw(ctx, FZ_ERROR_LIMIT, "page count limit");
 		pages = (unsigned)count;
 		fz_lookup_metadata(ctx, doc, FZ_META_INFO_TITLE, title, sizeof(title));
 		fz_lookup_metadata(ctx, doc, FZ_META_INFO_AUTHOR, author, sizeof(author));

@@ -18,12 +18,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git cmake autoconf automake libtool pkg-config python3
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: sonix-player/native-sdk
           key: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
       - name: Build pinned native readers and collect their licenses
         run: python3 sonix-player/tools/native-reader/build.py --target host --output native-host
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: sonix-player/native-sdk
+          key: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
       - uses: actions/upload-artifact@v4
         with:
           name: native-reader-host

@@ -83,6 +83,7 @@ static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 static pthread_t worker;
 static bool worker_running;
 static bool screen_on = true;
+static bool player_visible;
 
 // What the interface last asked for, what the worker is doing, and the answer.
 static char wanted[1024];	 // the track on screen
@@ -282,13 +283,11 @@ typedef enum {
 // press, and carrying on with it is the whole reason a background thread turns
 // into a problem.
 //
-// The screen is deliberately not part of the answer: a shape is for the file,
-// not for the moment, and it is kept, so a dark screen is the best time to
-// compute one -- the interface is not drawing and an idle-class thread finally
-// gets the core.
+// Stop expensive uncached decoding when nobody can see it. Cached results
+// remain usable, and the worker can start again when the player is shown.
 static bool still_wanted(const char *path) {
 	pthread_mutex_lock(&lock);
-	bool same = strcmp(wanted, path) == 0;
+	bool same = screen_on && player_visible && strcmp(wanted, path) == 0;
 	pthread_mutex_unlock(&lock);
 	return same;
 }
@@ -604,7 +603,7 @@ static void *worker_main(void *arg) {
 		char path[sizeof(wanted)];
 
 		pthread_mutex_lock(&lock);
-		while (!wanted[0] || strcmp(wanted, have_path) == 0) {
+		while (!screen_on || !player_visible || !wanted[0] || strcmp(wanted, have_path) == 0) {
 			pthread_cond_wait(&wake, &lock);
 		}
 		snprintf(path, sizeof(path), "%s", wanted);
@@ -741,14 +740,20 @@ bool waveform_pending(const char *path) {
 	return busy;
 }
 
-// See the note in waveform.h: this does not hold the worker back. It records
-// the screen state and signals on the way back up; waking a thread that is
-// already awake costs nothing.
+// On hide, in-flight work notices the changed predicate at the next chunk.
+// On show, a sleeping worker is signalled to look for uncached demand.
 void waveform_set_screen_on(bool on) {
 	pthread_mutex_lock(&lock);
-	bool woken = on && !screen_on;
+	bool changed = on != screen_on;
 	screen_on = on;
-	if (woken) {
+	if (changed) pthread_cond_signal(&wake);
+	pthread_mutex_unlock(&lock);
+}
+
+void waveform_set_visible(bool visible) {
+	pthread_mutex_lock(&lock);
+	if (player_visible != visible) {
+		player_visible = visible;
 		pthread_cond_signal(&wake);
 	}
 	pthread_mutex_unlock(&lock);

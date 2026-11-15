@@ -144,3 +144,101 @@ bool game_store_parse(const char *body, game_store_item_t *items, size_t capacit
 	if(!ok) *count=0;
 	return ok;
 }
+
+
+void store_ui_default(store_ui_t *out) {
+	memset(out,0,sizeof(*out));
+	strcpy(out->version,"built-in");
+	strcpy(out->heading,"Game Store");
+	strcpy(out->subtitle,"Browse games and emulators. Tap for details.");
+	out->layout=STORE_UI_LIST;out->palette=STORE_UI_SYSTEM;
+	out->radius=12;out->padding=12;out->gap=8;out->logo_size=72;
+}
+static bool ui_text(const json_doc_t *d,int root,const char *key,char *out,size_t cap) {
+	int t=json_get(d,root,key);
+	if(t<0||d->toks[t].type!=JSON_STRING||d->toks[t].end-d->toks[t].start>=(int)cap||
+		!json_str(d,t,out,cap)||!out[0])return false;
+	for(const unsigned char *p=(const unsigned char *)out;*p;++p)if(*p<32||*p>126)return false;
+	// Do not allow embedded escapes, even if decoded to printable characters.
+	return !memchr(d->text+d->toks[t].start,'\\',(size_t)(d->toks[t].end-d->toks[t].start));
+}
+static bool ui_number(const json_doc_t *d,int root,const char *key,unsigned low,unsigned high,unsigned *out) {
+	int t=json_get(d,root,key);
+	if(t<0||d->toks[t].type!=JSON_NUMBER)return false;
+	for(int n=d->toks[t].start;n<d->toks[t].end;++n)
+		if(d->text[n]<'0'||d->text[n]>'9')return false;
+	long v=json_long(d,t,-1);
+	if(v<(long)low||v>(long)high)return false;
+	*out=(unsigned)v;return true;
+}
+static bool ui_flag(const json_doc_t *d,int root,const char *key,bool *out) {
+	int t=json_get(d,root,key);
+	if(t<0||d->toks[t].type!=JSON_BOOL)return false;
+	*out=json_bool(d,t,false);return true;
+}
+bool store_ui_parse(const char *body,const char *version,store_ui_t *out) {
+	long parts[4];store_ui_t ui;
+	if(!body||!out||strlen(body)>GAME_STORE_UI_MAX||!version_ok(version,parts))return false;
+	store_ui_default(&ui);
+	json_doc_t d;if(!json_parse(body,&d))return false;
+	int root=json_root(&d);char layout[16],palette[16],declared[SDPACKAGES_VERSION];
+	unsigned schema=0;
+	bool ok=root>=0&&d.toks[root].type==JSON_OBJECT&&
+		ui_number(&d,root,"schema",1,1,&schema)&&
+		ui_text(&d,root,"version",declared,sizeof(declared))&&!strcmp(version,declared)&&
+		ui_text(&d,root,"heading",ui.heading,sizeof(ui.heading))&&
+		ui_text(&d,root,"subtitle",ui.subtitle,sizeof(ui.subtitle))&&
+		ui_text(&d,root,"layout",layout,sizeof(layout))&&
+		ui_text(&d,root,"palette",palette,sizeof(palette))&&
+		ui_number(&d,root,"radius",0,24,&ui.radius)&&
+		ui_number(&d,root,"padding",6,16,&ui.padding)&&
+		ui_number(&d,root,"gap",4,16,&ui.gap)&&
+		ui_number(&d,root,"logo_size",48,88,&ui.logo_size)&&
+		ui_flag(&d,root,"emulators_first",&ui.emulators_first)&&
+		ui_flag(&d,root,"show_descriptions",&ui.show_descriptions);
+	if(ok){
+		if(!strcmp(layout,"list"))ui.layout=STORE_UI_LIST;
+		else if(!strcmp(layout,"cards"))ui.layout=STORE_UI_CARDS;
+		else if(!strcmp(layout,"grid"))ui.layout=STORE_UI_GRID;
+		else ok=false;
+		if(!strcmp(palette,"system"))ui.palette=STORE_UI_SYSTEM;
+		else if(!strcmp(palette,"ocean"))ui.palette=STORE_UI_OCEAN;
+		else if(!strcmp(palette,"forest"))ui.palette=STORE_UI_FOREST;
+		else if(!strcmp(palette,"amber"))ui.palette=STORE_UI_AMBER;
+		else if(!strcmp(palette,"plum"))ui.palette=STORE_UI_PLUM;
+		else ok=false;
+	}
+	json_free(&d);
+	if(ok){strcpy(ui.version,version);*out=ui;}
+	return ok;
+}
+bool store_ui_find_asset(const char *catalog,store_ui_asset_t *out) {
+	static const char prefix[]="sonix-store-ui-v1-",suffix[]=".json";
+	if(!catalog||!out||strlen(catalog)>=GAME_STORE_JSON_MAX)return false;
+	memset(out,0,sizeof(*out));
+	json_doc_t d;if(!json_parse(catalog,&d))return false;
+	int root=json_root(&d),assets=json_get(&d,root,"assets");char tag[64];
+	bool ok=root>=0&&assets>=0&&d.toks[assets].type==JSON_ARRAY&&
+		json_obj_str(&d,root,"tag_name",tag,sizeof(tag))&&!strcmp(tag,GAME_STORE_TAG)&&
+		!json_obj_bool(&d,root,"draft",true);
+	for(int i=0;ok&&i<json_len(&d,assets);++i){
+		int a=json_at(&d,assets,i);char name[128],state[24],digest[80],url[256],expected[256];
+		store_ui_asset_t candidate={0};long parts[4];
+		if(!json_obj_str(&d,a,"name",name,sizeof(name)))continue;
+		size_t n=strlen(name),p=sizeof(prefix)-1,q=sizeof(suffix)-1;
+		if(n<=p+q||strncmp(name,prefix,p)||strcmp(name+n-q,suffix)||n-p-q>=sizeof(candidate.version))continue;
+		memcpy(candidate.version,name+p,n-p-q);
+		if(!version_ok(candidate.version,parts))continue;
+		long size=json_obj_long(&d,a,"size",0);
+		int len=snprintf(expected,sizeof(expected),"https://github.com/%s/releases/download/%s/%s",GAME_STORE_REPO,GAME_STORE_TAG,name);
+		if(size<=0||size>GAME_STORE_UI_MAX||len<=0||(size_t)len>=sizeof(expected)||
+			!json_obj_str(&d,a,"state",state,sizeof(state))||strcmp(state,"uploaded")||
+			!json_obj_str(&d,a,"browser_download_url",url,sizeof(url))||strcmp(url,expected)||
+			!json_obj_str(&d,a,"digest",digest,sizeof(digest))||!ota_policy_digest(digest))continue;
+		if(out->version[0]&&game_store_version_cmp(candidate.version,out->version)<=0)continue;
+		candidate.size=(size_t)size;strcpy(candidate.url,expected);strcpy(candidate.sha256,digest+7);
+		for(unsigned j=0;j<64;++j)if(candidate.sha256[j]>='A'&&candidate.sha256[j]<='F')candidate.sha256[j]+='a'-'A';
+		*out=candidate;
+	}
+	json_free(&d);return ok&&out->version[0];
+}

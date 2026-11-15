@@ -5,6 +5,9 @@ on:
     paths: ['game-store/core-request.json']
 permissions:
   contents: read
+concurrency:
+  group: sonix-game-store
+  cancel-in-progress: false
 jobs:
   core:
     if: contains(github.event.head_commit.message, '[game-check]')
@@ -12,6 +15,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the exact Update 11 firmware package contract
+        uses: actions/checkout@v4
+        with:
+          ref: e6495bbc064ba0a15f34be21ec53ebae4e634470
+          path: firmware-contract
       - uses: actions/cache/restore@v4
         with:
           path: sonix-player/rockbox-toolchain
@@ -29,11 +37,18 @@ jobs:
           with open(os.environ['GITHUB_ENV'],'a') as f:
               f.write('CORE_ID='+r['id']+'\nCORE_VERSION='+r['version']+'\n')
           PY
+      - name: Install fallback MIPS compiler if the firmware cache is unavailable
+        run: |
+          if [ ! -x sonix-player/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-gcc ]; then
+            sudo apt-get update
+            sudo apt-get install -y gcc-mipsel-linux-gnu binutils-mipsel-linux-gnu libc6-dev-mipsel-cross
+          fi
       - name: Compile MIPS core and verify exported ABI and runtime dependencies
         run: |
           set -eu
           compiler="$PWD/sonix-player/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-"
-          test -x "${compiler}gcc"
+          if [ ! -x "${compiler}gcc" ]; then compiler=mipsel-linux-gnu-; fi
+          command -v "${compiler}gcc"
           dir="game-store/cores/$CORE_ID"
           make -C "$dir" check
           staging="$PWD/core-stage/Games/$CORE_ID"
@@ -74,17 +89,70 @@ jobs:
               for p in sorted(root.rglob('*')):
                   if p.is_file(): archive.write(p,p.relative_to(root).as_posix())
           PY
-          python3 sonix-player/tools/build_sd_packages.py --game "$CORE_ID" --version "$CORE_VERSION" --output "game-artifact/$asset" game.zip > game-artifact/report.json
-          gcc -std=c11 -Wall -Wextra -Werror -Isonix-player sonix-player/tests/sdpackages_driver.c \
-            sonix-player/src/system/device/sdpackages.c sonix-player/src/system/device/sdpackages_paths.c \
-            sonix-player/src/system/core/json.c sonix-player/src/system/core/sha256.c -o game-install-check
+          python3 firmware-contract/sonix-player/tools/build_sd_packages.py --game "$CORE_ID" --version "$CORE_VERSION" --output "game-artifact/$asset" game.zip > game-artifact/report.json
+          gcc -std=c11 -Wall -Wextra -Werror -Ifirmware-contract/sonix-player firmware-contract/sonix-player/tests/sdpackages_driver.c \
+            firmware-contract/sonix-player/src/system/device/sdpackages.c firmware-contract/sonix-player/src/system/device/sdpackages_paths.c \
+            firmware-contract/sonix-player/src/system/core/json.c firmware-contract/sonix-player/src/system/core/sha256.c -o game-install-check
           card="$(mktemp -d)"
           sha="$(sha256sum "game-artifact/$asset" | cut -d' ' -f1)"
           test "$(./game-install-check "$card" "game-artifact/$asset" "$CORE_VERSION" "$sha" 0 "game:$CORE_ID")" = "0 $CORE_VERSION"
           test "$(find "$card" -name core.so -type f | wc -l)" -eq 1
+          core="$(find "$card" -name core.so -type f)"
+          test "$(tr -d '\n' < "$(dirname "$core")/.core-sha256")" = "$(sha256sum "$core" | cut -d' ' -f1)"
+          cmp "$core" "core-stage/Games/$CORE_ID/core.so"
           cp core-elf.txt game-artifact/
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('game-artifact/report.json')
+          r=json.loads(p.read_text())
+          r.update(runtime_abi=1,hardware_verified=False,firmware_test='v0.3.0.49-test')
+          p.write_text(json.dumps(r,indent=2)+'\n')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: sonix-game-candidate
           path: game-artifact/
           retention-days: 30
+
+  publish-device-test:
+    # Explicit maintainer request for first physical-device testing only.
+    # This does not assert hardware approval or publish a stable release.
+    needs: core
+    if: contains(github.event.head_commit.message, '[game-test]')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sonix-game-candidate
+          path: candidate
+      - name: Validate exact artifact and publish to prerelease catalog
+        run: |
+          set -eu
+          asset="$(python3 - <<'PY'
+          import json, hashlib
+          from pathlib import Path
+          request=json.loads(Path('game-store/core-request.json').read_text())
+          report=json.loads(Path('candidate/report.json').read_text())
+          assert request.get('channel')=='device-test'
+          assert request['id']=='2048' and request['version']=='v1.0.0'
+          assert report['version']==request['version'] and report['runtime_abi']==1 and report['hardware_verified'] is False
+          asset='sonix-game-v1-'+request['id']+'-'+request['version']+'.spk'
+          assert hashlib.sha256((Path('candidate')/asset).read_bytes()).hexdigest()==report['sha256']
+          print(asset)
+          PY
+          )"
+          gh release view sonix-game-store-v1 --json tagName,isDraft,isPrerelease,assets > catalog.json
+          ASSET="$asset" python3 - <<'PY'
+          import json,os
+          r=json.load(open('catalog.json'))
+          assert r['tagName']=='sonix-game-store-v1' and r['isPrerelease'] and not r['isDraft']
+          assert all(a['name']!=os.environ['ASSET'] for a in r['assets']), 'Version already published; do not overwrite'
+          PY
+          gh release upload sonix-game-store-v1 "candidate/$asset"

@@ -104,6 +104,8 @@ void player_screen_next(void);
 bool player_current_podcast_feed(long long *id_out, podcast_feed_t *feed_out);
 
 bool player_sheet_is_open(void);
+// True only for the waveform layout when the player is actually shown.
+bool player_waveform_visible(void);
 
 // True while the gesture in progress has been claimed as a sideways drag. The
 // tap handlers on the pages behind check this so that swiping the player in

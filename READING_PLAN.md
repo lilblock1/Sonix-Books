@@ -3,7 +3,8 @@
 Working baseline: `8dcb754968d6ad4b1f89a0aed98592e9a3cc0720`, tested by Noah
 on his HiBy R1. Development branch: `reading-overhaul`.
 
-No new firmware update build until all nine items below are complete.
+Noah authorized a test firmware build after item 6, including items 1-6.
+Items 7-9 remain for later work.
 Do not poll build status; Noah will report results. Component checks are allowed.
 Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 
@@ -12,7 +13,7 @@ Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 3. [x] Recently read shelf for multiple books (12-book history; source and local checks; device validation pending).
 4. [x] Reading-specific physical-button mapping, including optional volume-key page turns (source and local checks; device validation pending).
 5. [x] Search inside books and jump to a result (source and local checks; device validation pending).
-6. [ ] SD-card font selection with preview.
+6. [x] SD-card font selection with preview and seven-family font pack (source and local checks; device validation pending).
 7. [ ] Named bookmarks and notes.
 8. [ ] Offline dictionary lookup from the reader.
 9. [ ] TXT books with reading controls, bookmarks and resume.
@@ -20,5 +21,7 @@ Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 Implementation constraints: 64 MB device RAM; bounded background work; keep
 existing reading positions/bookmarks compatible. Distinguish verified tests
 from first-device validation. Do not publish a stable release automatically.
+Noah authorized an optional Wi-Fi Test channel and automatic prereleases only
+after all automated checks pass; retain hardware_tested:false until tested.
 
 Items 1–5 usage, limits and validation: [READING_LIBRARY.md](READING_LIBRARY.md).

@@ -2,15 +2,16 @@ name: Sonix Books checks
 
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: ['codex/**']
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: books-checks-${{ github.head_ref || github.ref_name }}
+  group: books-checks-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -114,6 +115,19 @@ jobs:
       - name: Test result jumps in a compressed EPUB
         working-directory: sonix-player
         run: python3 tests/test_ebooksearch_epub.py
+      - name: Test SD-card fonts, previews and lifetime policy
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -DHOST_BUILD=1 -Itests/font_stubs -I. \
+            tests/test_ebookfonts.c src/gui/ebook/ebookfonts.c \
+            src/system/ebook/ebookfontlist.c src/system/core/config.c \
+            -o build_tests/test_ebookfonts
+          fixture=$(mktemp -d)
+          trap 'rm -rf -- "$fixture"' EXIT
+          test_binary="$PWD/build_tests/test_ebookfonts"
+          (cd "$fixture" && "$test_binary" "$fixture")
+      - name: Verify bundled fonts and redistribution notices
+        run: python3 sonix-player/tests/test_font_pack.py
       - name: Check language resources and fork update destination
         run: python3 sonix-player/tests/check_resources.py
       - name: Test Wi-Fi update policy
@@ -122,6 +136,8 @@ jobs:
           gcc -std=c11 -Wall -Wextra -Werror -I. tests/test_ota_policy.c \
             src/system/device/ota_policy.c -o build_tests/test_ota_policy
           ./build_tests/test_ota_policy
+      - name: Test verified test-release publication policy
+        run: python3 sonix-player/tests/test_test_release.py
       - name: Test firmware chunk verification
         run: python3 sonix-player/tests/test_r1_candidate.py
       - name: Build the complete Linux simulator

@@ -50,3 +50,34 @@ bool ota_policy_battery(const char *percent) {
 	long level = strtol(percent, &end, 10);
 	return *end == '\0' && level >= 50 && level <= 100;
 }
+
+bool ota_policy_version(const char *text, long out[4]) {
+	if (!text || !out) return false;
+	memset(out, 0, 4 * sizeof(*out));
+	const char *p = text;
+	if (*p == 'v' || *p == 'V') p++;
+	int parts = 0;
+	while (parts < 4) {
+		if (!isdigit((unsigned char)*p)) return false;
+		long value = 0;
+		while (isdigit((unsigned char)*p)) {
+			if (value > 100000000 || (value == 100000000 && *p > '0')) return false;
+			value = value * 10 + (*p++ - '0');
+		}
+		out[parts++] = value;
+		if (*p != '.') break;
+		if (parts == 4) return false;
+		p++;
+	}
+	return parts >= 3 && (!*p || (parts == 4 && !strcmp(p, "-test")));
+}
+int ota_policy_version_cmp(const long a[4], const long b[4]) {
+	for (int i = 0; i < 4; i++) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+	return 0;
+}
+bool ota_policy_release(bool test_channel, bool draft, bool prerelease, const char *tag) {
+	long version[4];
+	if (draft || !ota_policy_version(tag, version)) return false;
+	bool test = strlen(tag) >= 5 && !strcmp(tag + strlen(tag) - 5, "-test");
+	return prerelease ? test_channel && test : !test;
+}

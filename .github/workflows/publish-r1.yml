@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       tag:
-        description: Version tag matching the candidate, for example v0.1.0
+        description: Version tag matching the tested candidate, for example v0.2.0.12
         required: true
         type: string
       tested_image_sha256:
@@ -53,7 +53,7 @@ jobs:
           assert run['conclusion'] == 'success' and run['event'] == 'push'
           assert run['name'] == 'R1 device binary' and run['head_branch'] == 'main'
           assert run['head_repository']['full_name'] == os.environ['GITHUB_REPOSITORY']
-          assert re.fullmatch(r'v?\d+\.\d+\.\d+', os.environ['TAG'])
+          assert re.fullmatch(r'v?\d+\.\d+\.\d+(?:\.\d+)?', os.environ['TAG'])
           assert os.environ['TAG'].lstrip('v') == report['version']
           assert report['device'] == 'HiBy R1' and report['structural_checks_passed']
           actual = hashlib.sha256(Path('candidate/r1.upt').read_bytes()).hexdigest()

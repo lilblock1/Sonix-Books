@@ -1,0 +1,206 @@
+{
+  "format": 1,
+  "families": [
+    {
+      "name": "Atkinson-Hyperlegible",
+      "id": "Atkinson-Hyperlegible/Regular.ttf",
+      "repository": "googlefonts/atkinson-hyperlegible",
+      "commit": "1cb311624b2ddf88e9e37873999d165a8cd28b46",
+      "license": "SIL-OFL-1.1"
+    },
+    {
+      "name": "OpenDyslexic",
+      "id": "OpenDyslexic/Regular.ttf",
+      "repository": "antijingoist/open-dyslexic",
+      "commit": "2a0133f365a9f1084f15ced78eafa4f54113afa8",
+      "license": "CC-BY-3.0 and Bitstream-Vera"
+    },
+    {
+      "name": "OpenDyslexic-Alta",
+      "id": "OpenDyslexic-Alta/Regular.ttf",
+      "repository": "antijingoist/open-dyslexic",
+      "commit": "2a0133f365a9f1084f15ced78eafa4f54113afa8",
+      "license": "CC-BY-3.0 and Bitstream-Vera"
+    },
+    {
+      "name": "OpenDyslexic-Mono",
+      "id": "OpenDyslexic-Mono/Regular.ttf",
+      "repository": "antijingoist/open-dyslexic",
+      "commit": "2a0133f365a9f1084f15ced78eafa4f54113afa8",
+      "license": "CC-BY-3.0 and Bitstream-Vera"
+    },
+    {
+      "name": "Source-Code-Pro",
+      "id": "Source-Code-Pro/Regular.ttf",
+      "repository": "adobe-fonts/source-code-pro",
+      "commit": "803b7e23ec97ae58b6232ea76519a76d428ba268",
+      "license": "SIL-OFL-1.1"
+    },
+    {
+      "name": "Source-Sans-3",
+      "id": "Source-Sans-3/Regular.ttf",
+      "repository": "adobe-fonts/source-sans",
+      "commit": "87b37a2daaed80fcb8e8ccb0085c4d72ddade12e",
+      "license": "SIL-OFL-1.1"
+    },
+    {
+      "name": "Source-Serif-4",
+      "id": "Source-Serif-4/Regular.ttf",
+      "repository": "adobe-fonts/source-serif",
+      "commit": "80d3f8894c09c937bebfa9011247d2e1c79fd6f4",
+      "license": "SIL-OFL-1.1"
+    }
+  ],
+  "files": [
+    {
+      "path": "Ebook/Fonts/Atkinson-Hyperlegible/Bold.ttf",
+      "source": "https://raw.githubusercontent.com/googlefonts/atkinson-hyperlegible/1cb311624b2ddf88e9e37873999d165a8cd28b46/fonts/ttf/AtkinsonHyperlegible-Bold.ttf",
+      "sha256": "5a3b0c8cc8ca545155150b4512a1fa248298df121c50d6557e651e61fbdab92f",
+      "size": 55256
+    },
+    {
+      "path": "Ebook/Fonts/Atkinson-Hyperlegible/BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/googlefonts/atkinson-hyperlegible/1cb311624b2ddf88e9e37873999d165a8cd28b46/fonts/ttf/AtkinsonHyperlegible-BoldItalic.ttf",
+      "sha256": "7a46f1b0ef2f64b61065c1a6b5a11fcb9b019b44062d88ba121a083cc39e86bf",
+      "size": 55288
+    },
+    {
+      "path": "Ebook/Fonts/Atkinson-Hyperlegible/Italic.ttf",
+      "source": "https://raw.githubusercontent.com/googlefonts/atkinson-hyperlegible/1cb311624b2ddf88e9e37873999d165a8cd28b46/fonts/ttf/AtkinsonHyperlegible-Italic.ttf",
+      "sha256": "021beda4d3c6edfc78872e436d74009f9a1bcb294331908fe5747c61d3dcc514",
+      "size": 54892
+    },
+    {
+      "path": "Ebook/Fonts/Atkinson-Hyperlegible/Regular.ttf",
+      "source": "https://raw.githubusercontent.com/googlefonts/atkinson-hyperlegible/1cb311624b2ddf88e9e37873999d165a8cd28b46/fonts/ttf/AtkinsonHyperlegible-Regular.ttf",
+      "sha256": "7fb917c89019896d0b52ee84b7cbb3304c18cb90b19a62f5e32712bd23e97669",
+      "size": 54348
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic-Alta/Bold.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexicAlta-Bold.ttf",
+      "sha256": "6c6f2cc2200d85cdb8997006866a525e3e6108de0b432dea38594894630d474f",
+      "size": 142324
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic-Alta/BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexicAlta-BoldItalic.ttf",
+      "sha256": "d674fd27dae723f57c3664e58d4d3336fec5f80d83a219d83ca80a89053a36f4",
+      "size": 289736
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic-Alta/Italic.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexicAlta-Italic.ttf",
+      "sha256": "3d010b2102f56d83d6dd9e67f256b5eedd5d3a02184721140546f88d033671da",
+      "size": 268968
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic-Alta/Regular.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexicAlta-Regular.ttf",
+      "sha256": "b0aef6c63a66abc1b5438f0f7f2341075ba8b576c0d0b676f76cad46c013dc0c",
+      "size": 137652
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic-Mono/Regular.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexicMono-Regular.ttf",
+      "sha256": "4b7e60e6874ba10bb4d28a8c5acc673767dae48c50f5b1f2fe20e6f2906a3a22",
+      "size": 157400
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic/Bold.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexic-Bold.ttf",
+      "sha256": "ffdbc5e2e454f6d9e1d0fc581995ef23f608cc5a2c92dc9ecae3d723547cedc7",
+      "size": 142508
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic/BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexic-BoldItalic.ttf",
+      "sha256": "9cdff05f925d0eb68976b6df216113989c8458471e69559b6a171b44e6931c18",
+      "size": 291756
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic/Italic.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexic-Italic.ttf",
+      "sha256": "885e906c6465e3c075d30bea1eb642df983b8e2ab42918ec1fbf73465591271d",
+      "size": 269124
+    },
+    {
+      "path": "Ebook/Fonts/OpenDyslexic/Regular.ttf",
+      "source": "https://raw.githubusercontent.com/antijingoist/open-dyslexic/2a0133f365a9f1084f15ced78eafa4f54113afa8/ttf/OpenDyslexic-Regular.ttf",
+      "sha256": "9e397e67a856cbe4caa5ff5ae8670a1ffe3d67d2591d69a1162556f01bb5ac6b",
+      "size": 138312
+    },
+    {
+      "path": "Ebook/Fonts/Source-Code-Pro/Bold.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/803b7e23ec97ae58b6232ea76519a76d428ba268/TTF/SourceCodePro-Bold.ttf",
+      "sha256": "b2095e0d657e6d28dc32444a9dacabab0c9241d0bf39d96371756cc9bdbc3a5f",
+      "size": 206804
+    },
+    {
+      "path": "Ebook/Fonts/Source-Code-Pro/BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/803b7e23ec97ae58b6232ea76519a76d428ba268/TTF/SourceCodePro-BoldIt.ttf",
+      "sha256": "1b49d9304012bf8db9e5dd4104183d5c122c445d0570a2259125f71977595b90",
+      "size": 169140
+    },
+    {
+      "path": "Ebook/Fonts/Source-Code-Pro/Italic.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/803b7e23ec97ae58b6232ea76519a76d428ba268/TTF/SourceCodePro-It.ttf",
+      "sha256": "9c9e0f4d016210a3c5bdfba5262637c5b26ddff4ccc382ebbc781de5961d0042",
+      "size": 166548
+    },
+    {
+      "path": "Ebook/Fonts/Source-Code-Pro/Regular.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/803b7e23ec97ae58b6232ea76519a76d428ba268/TTF/SourceCodePro-Regular.ttf",
+      "sha256": "74bd80d3e42a08517cd7e1108ba3d86f2da29ac0f3065be95e0357956ab9db37",
+      "size": 210312
+    },
+    {
+      "path": "Ebook/Fonts/Source-Sans-3/Bold.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/TTF/SourceSans3-Bold.ttf",
+      "sha256": "9214b9d95e4231c609802815c2646c98174e2102d0d37f88978a7f8e71006e6a",
+      "size": 428176
+    },
+    {
+      "path": "Ebook/Fonts/Source-Sans-3/BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/TTF/SourceSans3-BoldIt.ttf",
+      "sha256": "7978291fc1bf314db887e0366853b33c5cf2e964c7b95cfb9ce403a6ec46a842",
+      "size": 318700
+    },
+    {
+      "path": "Ebook/Fonts/Source-Sans-3/Italic.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/TTF/SourceSans3-It.ttf",
+      "sha256": "192afd78f0f54a3c69eaf02d43f4d9a821e9d6110e41d3d25d61a7385cd580e4",
+      "size": 315812
+    },
+    {
+      "path": "Ebook/Fonts/Source-Sans-3/Regular.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/TTF/SourceSans3-Regular.ttf",
+      "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+      "size": 431196
+    },
+    {
+      "path": "Ebook/Fonts/Source-Serif-4/Bold.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-serif/80d3f8894c09c937bebfa9011247d2e1c79fd6f4/TTF/SourceSerif4-Bold.ttf",
+      "sha256": "7cf4f4e1ad74f45058d5bc61716b82560442fbdcd9d3654d2dea96bf6c683d86",
+      "size": 271568
+    },
+    {
+      "path": "Ebook/Fonts/Source-Serif-4/BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-serif/80d3f8894c09c937bebfa9011247d2e1c79fd6f4/TTF/SourceSerif4-BoldIt.ttf",
+      "sha256": "7b215b37f8873f5579f3f8d2ded3ca7c588e2f435cd996605ebfc5befe2cd5eb",
+      "size": 191832
+    },
+    {
+      "path": "Ebook/Fonts/Source-Serif-4/Italic.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-serif/80d3f8894c09c937bebfa9011247d2e1c79fd6f4/TTF/SourceSerif4-It.ttf",
+      "sha256": "9d2950a8f1da66e21502c35d646a1d2148e79f9ea43fd2158cf02f5232e7f430",
+      "size": 187808
+    },
+    {
+      "path": "Ebook/Fonts/Source-Serif-4/Regular.ttf",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-serif/80d3f8894c09c937bebfa9011247d2e1c79fd6f4/TTF/SourceSerif4-Regular.ttf",
+      "sha256": "e5a4ee6a3d87bb9024796be390c6771e2a0eb1883dae25effaf57ca01668e24b",
+      "size": 261868
+    }
+  ]
+}

@@ -533,7 +533,7 @@ static void show_release(void) {
 	sysinfo_format_size((uint64_t)rel->size, size_text, sizeof(size_text));
 	snprintf(message, sizeof(message), tr("system_update_version_size"), rel->tag, size_text);
 
-	layout(PRODUCT_NAME, message, true, false);
+	layout(rel->test_build ? "Sonix Books - Test build" : PRODUCT_NAME, message, true, false);
 
 	render_notes(rel->notes);
 	fit_notes();
@@ -593,7 +593,12 @@ static void check_finished(ota_result_t r) {
 static void download_finished(ota_result_t r) {
 	switch (r) {
 	case OTA_OK:
-		show_installing();
+		layout(ota_release()->test_build ? "Test build ready" : "Update ready",
+			ota_release()->test_build ? "Download verified. This build has not passed an R1 hardware test. Install now?" :
+			"Download verified. Keep power stable while installing.", false, false);
+		set_button(0, "system_update", true, show_installing);
+		set_button(1, "cancel", false, close_card);
+		hide_buttons(2);
 		break;
 	case OTA_NO_CARD:
 		show_notice(tr("system_no_card"));
@@ -637,7 +642,7 @@ static void poll_cb(lv_timer_t *timer) {
 	}
 }
 
-static void online_clicked(void) {
+static void check_selected_channel(void) {
 	if (!ota_check_start()) {
 		show_notice(tr("system_update_busy"));
 		return;
@@ -645,6 +650,26 @@ static void online_clicked(void) {
 	phase = PHASE_CHECK;
 	show_checking();
 	start_polling();
+}
+
+static void online_clicked(void);
+static void start_stable_check(void) {
+	if (ota_set_test_channel(false)) check_selected_channel();
+}
+static void start_test_check(void) {
+	if (ota_set_test_channel(true)) check_selected_channel();
+}
+static void choose_test(void) {
+	layout("Test updates", "Automated checks passed; R1 hardware testing is pending. Flashing can still fail.", false, false);
+	set_button(0, "Check test builds", true, start_test_check);
+	set_button(1, "back", false, online_clicked);
+	hide_buttons(2);
+}
+static void online_clicked(void) {
+	layout("Update channel", ota_test_channel() ? "Selected: Test" : "Selected: Stable", false, false);
+	set_button(0, "Stable", !ota_test_channel(), start_stable_check);
+	set_button(1, "Test", ota_test_channel(), choose_test);
+	set_button(2, "cancel", false, close_card);
 }
 
 // The card goes first, then the file is looked for: on success the screen

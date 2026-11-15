@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "src/system/core/json.h"
+#include "src/system/core/config.h"
 #include "src/system/core/sha256.h"
 #include "src/system/core/utils.h"
 #include "src/system/device/firmware.h"
@@ -51,6 +52,7 @@ static char *notes_text;
 // Set on the interface thread when a check starts.
 static char repo[128];
 static char stem[64];
+static bool checking_test;
 
 static unsigned char chunk[64 * 1024];
 
@@ -138,42 +140,20 @@ void ota_progress(long *done, long *total) {
 const ota_release_t *ota_release(void) { return &release; }
 
 const char *ota_installed_version(void) { return sysinfo_os_version(); }
+bool ota_test_channel(void) { return !strcmp(config_get("updates", "channel", "stable"), "test"); }
+bool ota_set_test_channel(bool enabled) {
+	if (ota_busy()) return false;
+	config_set("updates", "channel", enabled ? "test" : "stable");
+	config_save();
+	release_valid = false;
+	return true;
+}
 
 // ---------------------------------------------------------------------------
 // versions
 // ---------------------------------------------------------------------------
 
 #define VERSION_PARTS 4
-
-// "1.0.2", "v1.0.2", "1.0.2-r1": up to four numbers, a leading v ignored,
-// anything after the numbers ignored. False when there is no number at all.
-static bool parse_version(const char *text, long out[VERSION_PARTS]) {
-	memset(out, 0, sizeof(long) * VERSION_PARTS);
-	const char *p = text;
-	if (*p == 'v' || *p == 'V') {
-		p++;
-	}
-	if (!isdigit((unsigned char)*p)) {
-		return false;
-	}
-	for (int i = 0; i < VERSION_PARTS && isdigit((unsigned char)*p); i++) {
-		out[i] = strtol(p, (char **)&p, 10);
-		if (*p != '.') {
-			break;
-		}
-		p++;
-	}
-	return true;
-}
-
-static int version_cmp(const long a[VERSION_PARTS], const long b[VERSION_PARTS]) {
-	for (int i = 0; i < VERSION_PARTS; i++) {
-		if (a[i] != b[i]) {
-			return a[i] < b[i] ? -1 : 1;
-		}
-	}
-	return 0;
-}
 
 // ---------------------------------------------------------------------------
 // the release list
@@ -222,7 +202,7 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 	}
 
 	long installed[VERSION_PARTS];
-	if (!parse_version(ota_installed_version(), installed)) {
+	if (!ota_policy_version(ota_installed_version(), installed)) {
 		memset(installed, 0, sizeof(installed));
 	}
 
@@ -233,15 +213,14 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 	int count = json_len(doc, root);
 	for (int i = 0; i < count; i++) {
 		int rel = json_at(doc, root, i);
-		if (json_obj_bool(doc, rel, "draft", true) || json_obj_bool(doc, rel, "prerelease", true)) {
-			continue;
-		}
 		char tag[32];
 		long version[VERSION_PARTS];
-		if (!json_obj_str(doc, rel, "tag_name", tag, sizeof(tag)) || !parse_version(tag, version)) {
+		if (!json_obj_str(doc, rel, "tag_name", tag, sizeof(tag)) || !ota_policy_version(tag, version) ||
+			!ota_policy_release(checking_test, json_obj_bool(doc, rel, "draft", true),
+				json_obj_bool(doc, rel, "prerelease", true), tag)) {
 			continue;
 		}
-		if (version_cmp(version, best) <= 0) {
+		if (ota_policy_version_cmp(version, best) <= 0) {
 			continue;
 		}
 		int asset = find_asset(doc, rel);
@@ -260,6 +239,7 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 
 	memset(&release, 0, sizeof(release));
 	release.notes = "";
+	release.test_build = json_obj_bool(doc, best_rel, "prerelease", true);
 	free(notes_text);
 	notes_text = NULL;
 	json_obj_str(doc, best_rel, "tag_name", release.tag, sizeof(release.tag));
@@ -350,6 +330,7 @@ bool ota_check_start(void) {
 		return false;
 	}
 	release_valid = false;
+	checking_test = ota_test_channel();
 
 	const char *r = sysinfo_ota_repo();
 	snprintf(repo, sizeof(repo), "%s", r[0] ? r : DEFAULT_REPO);

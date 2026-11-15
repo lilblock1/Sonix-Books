@@ -6,7 +6,7 @@
 #include "lvgl/lvgl.h"
 
 // ---------------------------------------------------------------------------
-// The four faces a book is set in, loaded from the card and only while reading
+// Reading faces, loaded only while reading; optional SD/Ebook/Fonts selection.
 //
 // Bookerly, in the four real styles rather than one face slanted and
 // emboldened by the renderer. The firmware ships them in
@@ -32,6 +32,16 @@
 // instead: Bookerly has no kana or kanji.
 bool ebookfonts_open(const char *sd_root, int size, bool japanese);
 
+// Independent face for a preview label. Detach the label, then delete the face
+// with lv_freetype_font_delete(). Empty id previews the automatic Default.
+lv_font_t *ebookfonts_preview(const char *sd_root, const char *id, int size, bool japanese);
+
+// Apply/save a validated relative SD font ID (empty restores Default). All
+// labels using active faces must be removed before this call. A bad custom
+// candidate leaves the old active faces and settings intact.
+bool ebookfonts_choose(const char *sd_root, const char *id, int size, bool japanese);
+const char *ebookfonts_active_id(void);
+
 // Everything above, undone. Safe when nothing was opened.
 void ebookfonts_close(void);
 
@@ -45,7 +55,7 @@ int ebookfonts_size(void);
 // to italic to bold to regular -- rather than making the book unreadable.
 const lv_font_t *ebookfonts_face(bool bold, bool italic);
 
-// True when Bookerly was found. The settings page says so, because a reader
+// True when the selected regular face (or automatic Default) was found. The settings page says so, because a reader
 // that quietly uses the interface font looks like a reader with a bug.
 bool ebookfonts_present(void);
 

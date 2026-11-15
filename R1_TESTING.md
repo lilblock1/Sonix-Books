@@ -60,14 +60,57 @@ Wi-Fi, sleep/wake, charging, USB file transfer and return to the main menu.
 Test with the actual card and filenames. Keep the audit report and SHA-256 of
 the exact image tested. Simulator tests do not replace these checks.
 
+## Reading 0.2.0 candidate acceptance
+
+The previous Sonix Books 0.1.0 image passed Noah's device test. This 0.2.0
+candidate adds reading items 1-6 and needs its own test before publication.
+
+- Search title, author and filename; browse folders and all five sorts.
+- Open several books, restart, and check progress badges and the recent shelf.
+- Test next/previous and optional volume page turns; holds must not seek music.
+  Verify power/key-lock combinations and background audio.
+- Find text in a long book; cancel a search, jump to a result, then reopen to
+  confirm the saved location. Try a missing term and a damaged book.
+- Extract the font pack to the card. Preview and apply several typefaces,
+  including OpenDyslexic; check regular/bold/italic, all font sizes, spacing,
+  vertical scrolling and paged mode. Confirm the selected font survives reboot.
+- Close the reader, remove a selected custom font and reopen: Default should
+  work. Restore the file and reopen to recover the saved typeface.
+- Check that Stable ignores test prereleases and Test finds a newer numbered
+  candidate. Cancel a download; check verified-download confirmation and low
+  battery refusal. Switch back to Stable without an automatic downgrade.
+- Read and search a large EPUB while playing audio. Repeat menu/preview/open/
+  close cycles; check responsiveness, sleep/wake and Wi-Fi.
+
+Record the exact candidate SHA-256 that passed. A successful Actions build
+alone is not a hardware-test attestation or a published OTA update.
+
 ## Wi-Fi updates from GitHub
 
-After the first Sonix Books installation, connect Wi-Fi and choose
-**Settings > System > Update firmware > Via internet**. The updater reads
-`lilblock1/Sonix-Books` Releases, ignores drafts and prereleases, selects a
-newer version with the correct device filename, shows its notes, downloads to
-a `.part` file, and requires the GitHub SHA-256 digest before making it an
-installable update. It does not silently install in the background.
+On a channel-enabled build, connect Wi-Fi and choose **Settings > System >
+Update firmware > Via internet**. Choose **Stable** for hardware-tested releases
+or **Test** to opt into experimental prereleases from lilblock1/Sonix-Books.
+Stable is the default. The preference is remembered, and the Test choice shows
+that hardware testing is pending before checking. Test also accepts newer
+stable releases; neither channel selects a downgrade.
+
+Only successful main-push candidates with all host checks, the MIPS/ABI build,
+and firmware audits passing are automatically published as test prereleases.
+They are numbered vA.B.C.N-test, where N is the build workflow number; the image
+reports A.B.C.N. The exact same numbered image may later be published as a
+hardware-tested stable release. An installed test build does not need to
+reinstall identical bits from Stable. Raise the three-part source version for
+the next stable feature series.
+
+The updater checks the correct model filename, size and GitHub SHA-256 digest,
+shows notes, downloads to a .part file and verifies it before renaming. After
+download verification, a separate confirmation starts installation, with the
+battery checked again. No background checking or unattended installation is
+added. Test releases retain hardware_tested:false in the audit report. These
+checks reduce avoidable errors but cannot prove that a test image will boot.
+
+Sonix Books 0.1.0 has no Test channel and ignores prereleases. Install this
+channel-enabled candidate once from SD; later test candidates can use Wi-Fi.
 
 Existing upstream Sonix still looks at Jepl4r's repository; the first install
 of this fork normally uses an SD card. Merely creating a GitHub fork does not

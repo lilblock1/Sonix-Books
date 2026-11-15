@@ -13,6 +13,7 @@
 #include "src/gui/ebook/ebookbar.h"
 #include "src/gui/ebook/ebookfind.h"
 #include "src/gui/ebook/ebookfonts.h"
+#include "src/system/ebook/ebookfontlist.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/shell/settingsrow.h"
@@ -97,7 +98,11 @@ static ebook_t *book;
 static ebookprogress_t reader_progress;
 static ebook_position_t search_origin;
 static int32_t search_scroll = -1;
-static bool search_suspending;
+static bool search_suspending, font_changing;
+static lv_font_t *font_preview;
+static lv_obj_t *font_preview_label;
+static ebookfontlist_t *font_catalog;
+static char font_candidate_id[EBOOKFONTLIST_ID];
 // Two boxes, not one: the slide needs the page it is leaving and the page it is
 // arriving at on screen together. `page_box` is always the one being read;
 // `page_spare` is the other, empty and parked off-screen between turns. In the
@@ -1495,7 +1500,7 @@ static void render_vertical(void) {
 // when the chapter is one long list.
 static void vertical_scrolled_cb(lv_event_t *e) {
 	(void)e;
-	if (!book || search_suspending || ebookfind_active() || turn_mode() != TURN_VERTICAL) {
+	if (!book || font_changing || search_suspending || ebookfind_active() || turn_mode() != TURN_VERTICAL) {
 		return;
 	}
 	int32_t top = lv_obj_get_scroll_y(page_box);
@@ -2001,7 +2006,28 @@ static void build_chapters(void);
 static void build_font(void);
 static void build_theme(void);
 
+static void font_menu_clear(void) {
+	if (font_preview_label) lv_obj_set_style_text_font(font_preview_label, &font_ui_20, 0);
+	font_preview_label = NULL;
+	if (font_preview) lv_freetype_font_delete(font_preview);
+	font_preview = NULL;
+	free(font_catalog); font_catalog = NULL;
+}
+
+static void clear_font_layout(void) {
+	lv_anim_delete(page_box, NULL);
+	lv_anim_delete(page_spare, NULL);
+	turning = false;
+	walk_reset();
+	lv_obj_clean(page_box);
+	lv_obj_clean(page_spare);
+	lv_obj_clean(count_box);
+	lv_obj_set_x(page_box, 0);
+	lv_obj_set_x(page_spare, (int32_t)g_cfg->screen_width);
+}
+
 static void menu_close(void) {
+	font_menu_clear();
 	if (menu_veil) {
 		lv_obj_set_hidden(menu_veil, true);
 	}
@@ -2077,6 +2103,7 @@ static void section_open(lv_event_t *e) {
 	section_t which = (section_t)(intptr_t)lv_event_get_user_data(e);
 	static const char *const SECTION_TITLES[] = {"chapters", "ebookreader_font_settings", "ebookreader_book_theme"};
 
+	font_menu_clear();
 	lv_obj_clean(menu_body);
 	chapters_built = 0;
 	menu_section = which;
@@ -2099,6 +2126,7 @@ static void section_open(lv_event_t *e) {
 
 static void section_back_cb(lv_event_t *e) {
 	(void)e;
+	font_menu_clear();
 	lv_obj_clean(menu_body);
 	chapters_built = 0;
 	lv_obj_set_hidden(menu_card, true);
@@ -2349,7 +2377,11 @@ static void option_cb(lv_event_t *e) {
 	config_store_save(config_ebook_store());
 
 	if (which == OPT_SIZE) {
+		font_changing = true;
+		clear_font_layout();
 		ebookfonts_set_size(opt_size);
+		choose_word_gap();
+		font_changing = false;
 	} else if (which == OPT_MARGIN) {
 		lv_obj_set_style_pad_all(page_box, opt_margin, 0);
 		lv_obj_set_style_pad_all(page_spare, opt_margin, 0);
@@ -2404,7 +2436,88 @@ static void stepper_row(lv_obj_t *parent, int which) {
 	stepper_values[which] = value;
 }
 
+static void font_list_cb(lv_event_t *e);
+
+static void font_apply_cb(lv_event_t *e) {
+	(void)e;
+	char id[EBOOKFONTLIST_ID];
+	snprintf(id, sizeof(id), "%s", font_candidate_id);
+	font_menu_clear();
+	lv_obj_clean(menu_body);
+	font_changing = true;
+	clear_font_layout();
+	bool applied = ebookfonts_choose(g_cfg->sd_root_path, id, opt_size, ebook_is_japanese(book));
+	choose_word_gap();
+	font_changing = false;
+	page_stack_depth = 0;
+	page_number_recount();
+	show_page();
+	if (!applied) toast_plain("Font unavailable. Your previous font is still selected.");
+	build_font();
+}
+
+static void font_pick_cb(lv_event_t *e) {
+	int index = (int)(intptr_t)lv_event_get_user_data(e);
+	char id[EBOOKFONTLIST_ID] = "";
+	if (index >= 0) {
+		if (!font_catalog || index >= font_catalog->count) return;
+		snprintf(id, sizeof(id), "%s", font_catalog->entries[index].id);
+	}
+	font_menu_clear();
+	lv_obj_clean(menu_body);
+	snprintf(font_candidate_id, sizeof(font_candidate_id), "%s", id);
+	char name[EBOOKFONTLIST_ID];
+	ebookfontlist_name(id, name, sizeof(name));
+	settingsrow_heading(menu_body, name);
+	font_preview = ebookfonts_preview(g_cfg->sd_root_path, id, opt_size, ebook_is_japanese(book));
+	if (!id[0] || font_preview) {
+		font_preview_label = lv_label_create(menu_body);
+		lv_obj_set_width(font_preview_label, lv_pct(100));
+		lv_label_set_long_mode(font_preview_label, LV_LABEL_LONG_WRAP);
+		lv_label_set_text(font_preview_label, "The quick brown fox jumps over the lazy dog.\nReading should feel comfortable.\nI l 1   O 0   B 8   0123456789");
+		lv_obj_add_style(font_preview_label, &theme_style_text, 0);
+		lv_obj_set_style_text_font(font_preview_label, font_preview ? font_preview : &font_ui_20, 0);
+		lv_obj_set_style_text_line_space(font_preview_label, opt_line, 0);
+		settingsrow_action(menu_body, "Apply font", font_apply_cb, NULL);
+	} else {
+		lv_obj_t *note = lv_label_create(menu_body);
+		lv_obj_set_width(note, lv_pct(100));
+		lv_label_set_text(note, "This font could not be loaded. Try another font or Default.");
+		lv_obj_add_style(note, &theme_style_text_dim, 0);
+		lv_obj_set_style_text_font(note, &font_ui_20, 0);
+	}
+	settingsrow_action(menu_body, "Back to fonts", font_list_cb, NULL);
+	lv_obj_scroll_to_y(menu_body, 0, LV_ANIM_OFF);
+}
+
+static void font_list_cb(lv_event_t *e) {
+	(void)e;
+	font_menu_clear();
+	lv_obj_clean(menu_body);
+	for (int i = 0; i < OPT_COUNT; i++) stepper_values[i] = NULL;
+	settingsrow_action(menu_body, "Default (Bookerly / Japanese)", font_pick_cb, (void *)(intptr_t)-1);
+	font_catalog = malloc(sizeof(*font_catalog));
+	if (font_catalog) {
+		ebookfontlist_scan(g_cfg->sd_root_path, font_catalog);
+		for (int i = 0; i < font_catalog->count; i++)
+			settingsrow_action(menu_body, font_catalog->entries[i].name, font_pick_cb, (void *)(intptr_t)i);
+	}
+	lv_obj_t *note = lv_label_create(menu_body);
+	lv_obj_set_width(note, lv_pct(100));
+	lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+	lv_label_set_text(note, !font_catalog ? "Not enough memory to list fonts. Default is still available." :
+		(font_catalog->truncated ? "Showing up to 32 fonts. Keep additional fonts outside Ebook/Fonts." :
+		"Add TTF/OTF fonts to Ebook/Fonts on your SD card. Tap a name to preview, then Apply."));
+	lv_obj_add_style(note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(note, &font_ui_18, 0);
+	lv_obj_scroll_to_y(menu_body, 0, LV_ANIM_OFF);
+}
+
 static void build_font(void) {
+	char name[EBOOKFONTLIST_ID + 16], face[EBOOKFONTLIST_ID];
+	ebookfontlist_name(ebookfonts_active_id(), face, sizeof(face));
+	snprintf(name, sizeof(name), "Typeface: %s", face);
+	settingsrow_action(menu_body, name, font_list_cb, NULL);
 	for (int i = 0; i < OPT_COUNT; i++) {
 		stepper_values[i] = NULL;
 		stepper_row(menu_body, i);

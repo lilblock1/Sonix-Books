@@ -11,10 +11,10 @@
 // The repository is "ota-repo" in system-info.json, "owner/name";
 // lilblock1/Sonix-Books when the file does not say.
 //
-// A release counts when it is neither a draft nor a pre-release, its tag reads
-// as a version above OS_version in system-info.json ("1.0.2", "v1.0.2"), and
-// one of its assets is named "<update_stem>.upt" in any case. The highest such
-// tag wins.
+// Stable ignores drafts and prereleases. The optional Test channel also accepts
+// vA.B.C.N-test prereleases, whose numeric build N must be newer than installed.
+// Both channels retain model, size, digest and battery guards. No downgrade is
+// selected automatically. The channel preference defaults to Stable.
 //
 // Both steps run on a worker thread, one at a time. The interface polls
 // ota_state() and the rest; nothing here calls back into it.
@@ -45,6 +45,7 @@ typedef enum {
 
 typedef struct {
 	char tag[32];
+	bool test_build;
 	char name[128];		// the release title, the tag when it has none
 	const char *notes;	// the release description, Markdown as written, cut at OTA_NOTES_MAX; never NULL
 	long size;			// bytes
@@ -55,6 +56,9 @@ typedef struct {
 // Starts looking for a release. False when a check or a download is already
 // running.
 bool ota_check_start(void);
+
+bool ota_test_channel(void);
+bool ota_set_test_channel(bool enabled);
 
 // Downloads the release found by the last successful check. False when there
 // is none, or something is already running.

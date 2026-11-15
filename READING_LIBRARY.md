@@ -225,8 +225,8 @@ Local checks completed:
   toolchain/link/size checks remain for the combined build.
 
 The progress/history modules, reader, library scanner and shelf also compiled individually against the
-Linux headers with warnings treated as errors. No linked player, firmware
-update, release or version change was made for these items.
+Linux headers with warnings treated as errors. Those component checks did not link the player or create firmware. Version
+0.2.0 now identifies the authorized combined test candidate for items 1-6.
 
 The POSIX symlink cases are included in the scanner tests for the future Linux
 checks. They were not executed by the native Windows test run. On-device
@@ -291,6 +291,33 @@ gcc -std=c11 -Wall -Wextra -Werror -I. \
 python3 tests/test_ebooksearch_epub.py
 ~~~
 
-The existing checks workflow will run these tests when it is eventually invoked
-on a supported branch. Pushing `reading-overhaul` does not match its push
-triggers and does not build an update.
+The checks workflow runs these tests on main. The authorized main push for
+items 1-6 also triggers the R1 candidate build. All checks must pass before automatic
+publication as an experimental prerelease; Stable still requires device testing.
+
+## SD-card font selection (item 6)
+
+Extract [Sonix-Books-Fonts.zip](extras/reading-fonts/Sonix-Books-Fonts.zip) to the
+SD-card root, merging its Ebook directory. In an open book, open Font settings,
+then Typeface. Select a font to preview it and choose Apply to save it. Default
+restores the existing automatic Bookerly/Japanese selection.
+
+The pack contains Atkinson Hyperlegible, Source Serif 4, Source Sans 3, Source
+Code Pro, OpenDyslexic, OpenDyslexic Alta and OpenDyslexic Mono. Compare them for
+your own reading comfort. The pack stays on the card, outside the firmware.
+See [font pack details and licenses](extras/reading-fonts/README.md).
+
+Additional TTF/OTF files can go directly in Ebook/Fonts, or in a family directory
+with Regular.ttf (or .otf) and optional Italic, Bold and BoldItalic files. The
+picker supports 32 choices, scans at most 256 directory entries and rejects
+files over 16 MiB. Paths and font container bounds are checked; symbolic links
+are rejected. The preview uses a separate face and changes nothing until Apply.
+Missing styles use an available face. Missing saved fonts use Default without
+erasing the selection, so reinserting the card restores it on the next open.
+
+Reader labels detach before replacing or resizing their font faces. Unit tests
+cover catalog/path bounds, invalid previews, persistence, style fallback, saved
+font removal/recovery and balanced face lifetimes using a fake FreeType backend.
+Separately, every actual font file passed pinned checksum, SFNT bounds and
+license-notice checks and rasterized with Pillow/FreeType locally. The device
+still needs font preview, scrolling, card removal and memory checks.

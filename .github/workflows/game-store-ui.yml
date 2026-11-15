@@ -1,0 +1,65 @@
+name: Publish store appearance only (no firmware)
+on:
+  push:
+    branches: [game-store-content]
+    paths: ['game-store/ui/design.json']
+permissions:
+  contents: write
+concurrency:
+  group: sonix-game-store
+  cancel-in-progress: false
+jobs:
+  appearance:
+    if: contains(github.event.head_commit.message, '[store-ui-publish]')
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate bounded data-only layout schema
+        run: |
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          raw=Path('game-store/ui/design.json').read_bytes()
+          assert 0<len(raw)<=4096
+          def unique(pairs):
+              result={}
+              for k,v in pairs:
+                  assert k not in result,k
+                  result[k]=v
+              return result
+          d=json.loads(raw,object_pairs_hook=unique)
+          assert set(d)=={'schema','version','heading','subtitle','layout','palette','radius','padding','gap','logo_size','emulators_first','show_descriptions'}
+          assert type(d['schema']) is int and d['schema']==1
+          assert re.fullmatch(r'v(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})',d['version'])
+          for k,lim in [('heading',39),('subtitle',119)]:
+              assert type(d[k]) is str and 0<len(d[k])<=lim and all(32<=ord(c)<=126 and c not in '"\\' for c in d[k])
+          assert d['layout'] in ('list','cards','grid')
+          assert d['palette'] in ('system','ocean','forest','amber','plum')
+          for k,lo,hi in [('radius',0,24),('padding',6,16),('gap',4,16),('logo_size',48,88)]:
+              assert type(d[k]) is int and lo<=d[k]<=hi
+          for k in ('emulators_first','show_descriptions'): assert type(d[k]) is bool
+          name='sonix-store-ui-v1-'+d['version']+'.json'
+          Path(name).write_text(json.dumps(d,ensure_ascii=True,separators=(',',':'))+'\n',encoding='ascii')
+          Path('asset-name.txt').write_text(name)
+          PY
+      - name: Upload immutable appearance asset to independent test catalog
+        run: |
+          set -eu
+          asset="$(cat asset-name.txt)"
+          gh release view sonix-game-store-v1 --json tagName,isDraft,isPrerelease,assets > catalog.json
+          ASSET="$asset" python3 - <<'PY'
+          import json,os,re
+          d=json.load(open('catalog.json'))
+          assert d['tagName']=='sonix-game-store-v1' and d['isPrerelease'] and not d['isDraft']
+          current=os.environ['ASSET']
+          pattern=r'sonix-store-ui-v1-v(\d+)\.(\d+)\.(\d+)\.json'
+          v=tuple(map(int,re.fullmatch(pattern,current).groups()))
+          for a in d['assets']:
+              m=re.fullmatch(pattern,a['name'])
+              if m: assert v>tuple(map(int,m.groups())), 'Increase appearance version; never overwrite'
+          PY
+          gh release upload sonix-game-store-v1 "$asset"
+          echo "Published $asset (store design only)"

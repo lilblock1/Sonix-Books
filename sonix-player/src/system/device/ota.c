@@ -60,7 +60,13 @@ static unsigned extras_mask;
 static bool store_mode, store_valid;
 static game_store_item_t store_items[GAME_STORE_MAX];
 static uint8_t store_logos[GAME_STORE_MAX][GAME_LOGO_BYTES];
-static bool store_logo_valid[GAME_STORE_MAX];
+static char store_logo_digest[GAME_STORE_MAX][65];
+static unsigned store_logo_cursor;
+static int store_logo_slot(const char *digest) {
+	if(!digest||!digest[0])return -1;
+	for(unsigned i=0;i<GAME_STORE_MAX;++i)if(!strcmp(store_logo_digest[i],digest))return (int)i;
+	return -1;
+}
 static size_t store_count;
 static unsigned store_index;
 static struct { long size; char url[512], sha[65]; } extras[SD_EXTRAS_COUNT];
@@ -735,20 +741,33 @@ static void *store_check_thread(void *unused) {
 		game_store_parse(body,store_items,GAME_STORE_MAX,&store_count)) {
 		// Limit optional artwork work per refresh. Missing/failed artwork
 		// cannot prevent browsing or installing verified game packages.
-		unsigned attempted=0;
-		for(unsigned i=0;i<store_count&&!cancelled();++i){
-			if(!store_items[i].logo_url[0]||attempted>=12)continue;
+		// Retain digest-keyed art across refreshes, dropping obsolete versions.
+		for(unsigned slot=0;slot<GAME_STORE_MAX;++slot){
+			if(!store_logo_digest[slot][0])continue;
+			bool keep=false;
+			for(unsigned i=0;i<store_count;++i)if(!strcmp(store_logo_digest[slot],store_items[i].logo_sha256)){keep=true;break;}
+			if(!keep)store_logo_digest[slot][0]=0;
+		}
+		unsigned attempted=0, visited=0;
+		unsigned start=store_count?store_logo_cursor%(unsigned)store_count:0;
+		for(;visited<store_count&&!cancelled()&&attempted<12;++visited){
+			unsigned i=(start+visited)%(unsigned)store_count;
+			if(!store_items[i].logo_url[0]||store_logo_slot(store_items[i].logo_sha256)>=0)continue;
 			++attempted;
 			char *pixels=NULL;size_t bytes=0;
 			if(http_get(store_items[i].logo_url,&pixels,&bytes,GAME_LOGO_BYTES+1,4)&&bytes==GAME_LOGO_BYTES){
 				sha256_ctx sha;char digest[65];sha256_init(&sha);sha256_update(&sha,pixels,bytes);sha256_final_hex(&sha,digest);
 				const char *last=http_last_final_url();
 				if(last&&!strncmp(last,"https://",8)&&!strcmp(digest,store_items[i].logo_sha256)){
-					memcpy(store_logos[i],pixels,bytes);store_logo_valid[i]=true;
+					for(unsigned slot=0;slot<GAME_STORE_MAX;++slot)if(!store_logo_digest[slot][0]){
+						memcpy(store_logos[slot],pixels,bytes);
+						memcpy(store_logo_digest[slot],digest,sizeof(digest));break;
+					}
 				}
 			}
 			free(pixels);
 		}
+		store_logo_cursor=store_count?(start+visited)%(unsigned)store_count:0;
 		store_valid=true;
 	}
 	free(body);
@@ -758,7 +777,9 @@ static void *store_check_thread(void *unused) {
 
 size_t ota_store_count(void) { return store_valid ? store_count : 0; }
 const uint8_t *ota_store_logo(unsigned index) {
-	return store_valid&&index<store_count&&store_logo_valid[index]?store_logos[index]:NULL;
+	if(!store_valid||index>=store_count)return NULL;
+	int slot=store_logo_slot(store_items[index].logo_sha256);
+	return slot>=0?store_logos[slot]:NULL;
 }
 const game_store_item_t *ota_store_item(unsigned index) {
 	return store_valid && index<store_count ? &store_items[index] : NULL;
@@ -767,7 +788,6 @@ const game_store_item_t *ota_store_item(unsigned index) {
 bool ota_store_check_start(void) {
 	if (!begin(OTA_CHECKING)) return false;
 	store_mode=true; store_valid=release_valid=false; store_count=0; extras_mask=0;
-	memset(store_logo_valid,0,sizeof(store_logo_valid));
 	pthread_t thread;
 	if(pthread_create(&thread,NULL,store_check_thread,NULL)) finish(OTA_CHECK_FAILED);
 	else pthread_detach(thread);

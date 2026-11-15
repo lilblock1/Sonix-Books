@@ -1,5 +1,6 @@
 name: Native SD-card readers
 on:
+  workflow_call:
   push:
     branches: ['codex/common-book-formats']
   workflow_dispatch:
@@ -17,7 +18,7 @@ jobs:
       - name: Install native reader build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake autoconf automake libtool pkg-config python3
+          sudo apt-get install -y --no-install-recommends build-essential git cmake autoconf automake libtool pkg-config python3 calibre
       - uses: actions/cache/restore@v4
         with:
           path: sonix-player/native-sdk
@@ -34,3 +35,38 @@ jobs:
           name: native-reader-host
           path: native-host/
           retention-days: 14
+      - name: Read generated books through the native engine
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 sonix-player/tools/native-reader/test_formats.py native-host/Ebook/Tools/sonix_booktool --kindle
+  native-r1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install component build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git cmake autoconf automake libtool pkg-config python3
+      - uses: actions/cache/restore@v4
+        with:
+          path: sonix-player/rockbox-toolchain
+          key: r1-player-toolchain-ubuntu24-${{ hashFiles('sonix-player/rockboxdev/**') }}
+      - name: Require the previously validated R1 compiler
+        run: test -x sonix-player/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-gcc
+      - uses: actions/cache/restore@v4
+        with:
+          path: sonix-player/native-sdk
+          key: native-reader-r1-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
+      - name: Build isolated MIPS readers (no firmware image)
+        run: python3 sonix-player/tools/native-reader/build.py --target r1 --output native-r1
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: sonix-player/native-sdk
+          key: native-reader-r1-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-reader-r1
+          path: native-r1/
+          retention-days: 30

@@ -2,6 +2,8 @@
 #include <mupdf/fitz.h>
 #include <mobi.h>
 #include <errno.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <math.h>
 #include <signal.h>
@@ -13,6 +15,7 @@
 #include <strings.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -225,8 +228,92 @@ static int send_response(booktool_status_t status, unsigned pages, unsigned flag
 	return 0;
 }
 
+static bool directory(const char *path) {
+	struct stat st;
+	if (!lstat(path, &st)) return S_ISDIR(st.st_mode);
+	return errno == ENOENT && !mkdir(path, 0755);
+}
+static bool bounded_regular(const char *path) {
+	struct stat st;
+	return !lstat(path, &st) && S_ISREG(st.st_mode) && st.st_size > 0 && (uint64_t)st.st_size <= BOOKTOOL_FILE_MAX;
+}
+static int prepare_kindle(const char *tool, const char *path, const char *root) {
+	char managed[1200], cache[1200], final[1400], stage[1400], converter[1400];
+	if (!root || !root[0] || strlen(root) > 800 || !directory(root)) goto fail;
+	int n = snprintf(managed, sizeof(managed), "%s/.sonix", root);
+	if (n < 0 || (size_t)n >= sizeof(managed) || !directory(managed)) goto fail;
+	n = snprintf(cache, sizeof(cache), "%s/book-cache", managed);
+	if (n < 0 || (size_t)n >= sizeof(cache) || !directory(cache)) goto fail;
+	FILE *input = fopen(path, "rb"); if (!input) goto fail;
+	fz_sha256 hash; fz_sha256_init(&hash);
+	unsigned char chunk[65536], digest[32]; size_t got;
+	while ((got = fread(chunk, 1, sizeof(chunk), input))) fz_sha256_update(&hash, chunk, got);
+	bool good = !ferror(input); fclose(input); if (!good) goto fail;
+	fz_sha256_final(&hash, digest);
+	char key[65]; for (unsigned i = 0; i < 32; i++) snprintf(key + i * 2, 3, "%02x", digest[i]);
+	n = snprintf(final, sizeof(final), "%s/%s.epub", cache, key);
+	if (n < 0 || (size_t)n >= sizeof(final)) goto fail;
+	if (bounded_regular(final)) return send_response(BOOKTOOL_OK, 0, BOOKTOOL_EPUB, NULL, NULL, (const unsigned char *)final, strlen(final), NULL, 0);
+	MOBIData *mobi = mobi_init(); if (!mobi) goto fail;
+	MOBI_RET result = mobi_load_filename(mobi, path);
+	bool protected = mobi_is_encrypted(mobi), replica = mobi_is_replica(mobi);
+	mobi_free(mobi);
+	if (protected || result == MOBI_FILE_ENCRYPTED) return send_response(BOOKTOOL_PROTECTED, 0, 0, NULL, NULL, NULL, 0, NULL, 0);
+	if (result != MOBI_SUCCESS || replica) goto fail;
+	struct statvfs space;
+	if (statvfs(cache, &space) || (uint64_t)space.f_bavail * (space.f_frsize ? space.f_frsize : space.f_bsize) < BOOKTOOL_FILE_MAX + 8u * 1024u * 1024u) goto fail;
+	n = snprintf(stage, sizeof(stage), "%s/import-XXXXXX", cache);
+	if (n < 0 || (size_t)n >= sizeof(stage) || !mkdtemp(stage)) goto fail;
+	const char *slash = strrchr(tool, '/');
+	n = snprintf(converter, sizeof(converter), "%.*s/mobitool", slash ? (int)(slash - tool) : 1, slash ? tool : ".");
+	bool converted = false;
+	if (n > 0 && (size_t)n < sizeof(converter)) {
+		pid_t child = fork();
+		if (!child) {
+			int null = open("/dev/null", O_WRONLY);
+			if (null >= 0) { (void)dup2(null, STDOUT_FILENO); (void)dup2(null, STDERR_FILENO); close(null); }
+			execl(converter, converter, "-e", "-o", stage, path, (char *)NULL); _exit(127);
+		}
+		if (child > 0) {
+			int status = 0; pid_t waited;
+			do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+			converted = waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+		}
+	}
+	DIR *dir = opendir(stage); struct dirent *entry;
+	unsigned found = 0; char candidate[1800] = "";
+	if (dir) {
+		while ((entry = readdir(dir))) {
+			if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+			char file[1800]; n = snprintf(file, sizeof(file), "%s/%s", stage, entry->d_name);
+			if (n < 0 || (size_t)n >= sizeof(file)) { converted = false; continue; }
+			if (converted && suffix(file, ".epub") && bounded_regular(file)) { found++; memcpy(candidate, file, strlen(file) + 1); }
+		}
+		closedir(dir);
+	}
+	converted = converted && found == 1;
+	if (converted) {
+		int fd = open(candidate, O_RDONLY | O_NOFOLLOW);
+		converted = fd >= 0 && !fsync(fd); if (fd >= 0) close(fd);
+		if (converted) converted = !rename(candidate, final);
+	}
+	dir = opendir(stage);
+	if (dir) {
+		while ((entry = readdir(dir))) {
+			if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+			char file[1800]; n = snprintf(file, sizeof(file), "%s/%s", stage, entry->d_name);
+			if (n > 0 && (size_t)n < sizeof(file)) unlink(file);
+		}
+		closedir(dir);
+	}
+	rmdir(stage);
+	if (converted) return send_response(BOOKTOOL_OK, 0, BOOKTOOL_EPUB, NULL, NULL, (const unsigned char *)final, strlen(final), NULL, 0);
+fail:
+	return send_response(BOOKTOOL_BAD_FILE, 0, 0, NULL, NULL, NULL, 0, NULL, 0);
+}
+
 int main(int argc, char **argv) {
-	if (argc != 4) return send_response(BOOKTOOL_BAD_FILE, 0, 0, NULL, NULL, NULL, 0, NULL, 0);
+	if (argc != 4 && argc != 5) return send_response(BOOKTOOL_BAD_FILE, 0, 0, NULL, NULL, NULL, 0, NULL, 0);
 	// The launcher also enforces a wall-clock deadline. These are independent
 	// ceilings on expensive/invalid files, not changes to the audio process.
 	struct rlimit memory = {64u * 1024u * 1024u, 64u * 1024u * 1024u}, cpu = {20, 20}, output = {128u * 1024u * 1024u, 128u * 1024u * 1024u};
@@ -234,6 +321,9 @@ int main(int argc, char **argv) {
 	struct stat st;
 	if (stat(argv[3], &st) || !S_ISREG(st.st_mode) || st.st_size <= 0 || (uint64_t)st.st_size > BOOKTOOL_FILE_MAX)
 		return send_response(BOOKTOOL_LIMIT, 0, 0, NULL, NULL, NULL, 0, NULL, 0);
+	if (!strcmp(argv[1], "prepare")) return prepare_kindle(argv[0], argv[3], argc == 5 ? argv[4] : NULL);
+	if (strcmp(argv[1], "info") && strcmp(argv[1], "text") && strcmp(argv[1], "page"))
+		return send_response(BOOKTOOL_BAD_FILE, 0, 0, NULL, NULL, NULL, 0, NULL, 0);
 	fz_alloc_context alloc = {NULL, limited_malloc, limited_realloc, limited_free};
 	fz_context *ctx = fz_new_context(&alloc, NULL, 4u * 1024u * 1024u);
 	if (!ctx) return send_response(BOOKTOOL_LIMIT, 0, 0, NULL, NULL, NULL, 0, NULL, 0);
@@ -245,7 +335,21 @@ int main(int argc, char **argv) {
 		fz_register_document_handlers(ctx);
 		if (suffix(argv[3], ".rtf")) source = rtf_html(ctx, argv[3]);
 		if (suffix(argv[3], ".odt")) source = odt_html(ctx, argv[3]);
-		doc = source ? fz_open_document_with_buffer(ctx, "text/html", source) : fz_open_document(ctx, argv[3]);
+		if (suffix(argv[3], ".fbz")) {
+			fz_archive *archive = fz_open_archive(ctx, argv[3]);
+			fz_try(ctx) {
+				int entries = fz_count_archive_entries(ctx, archive);
+				if (entries > 1024) fz_throw(ctx, FZ_ERROR_LIMIT, "FBZ entries");
+				for (int i = 0; i < entries && !source; i++) {
+					const char *name = fz_list_archive_entry(ctx, archive, i);
+					if (suffix(name, ".fb2")) source = fz_read_archive_entry(ctx, archive, name);
+				}
+				if (!source) fz_throw(ctx, FZ_ERROR_FORMAT, "FB2 missing");
+			}
+			fz_always(ctx) fz_drop_archive(ctx, archive);
+			fz_catch(ctx) fz_rethrow(ctx);
+		}
+		doc = source ? fz_open_document_with_buffer(ctx, suffix(argv[3], ".fbz") ? "book.fb2" : "text/html", source) : fz_open_document(ctx, argv[3]);
 		if (fz_needs_password(ctx, doc)) { status = BOOKTOOL_PROTECTED; fz_throw(ctx, FZ_ERROR_UNSUPPORTED, "protected book"); }
 		bool reflow = fz_is_document_reflowable(ctx, doc);
 		if (reflow) fz_layout_document(ctx, doc, 400, 600, 20);

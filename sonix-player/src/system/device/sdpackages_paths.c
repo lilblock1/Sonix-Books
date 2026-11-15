@@ -108,22 +108,45 @@ static bool version_at_least(const char *a, const char *b) {
 		unsigned long av = strtoul(a, &ae, 10), bv = strtoul(b, &be, 10);
 		if (ae == a || be == b) return false;
 		if (av != bv) return av > bv;
-		if (*ae != '.' || *be != '.') return *ae == '.' && *be != '.';
+		if (*ae != '.' || *be != '.') {
+			if (*ae != '.' && *be != '.') return true;
+			return *ae == '.';
+		}
 		a = ae + 1; b = be + 1;
 	}
 	return true;
 }
+static bool component_path(const char *root, unsigned i, char *out, size_t size, char version[SDPACKAGES_VERSION]) {
+	const char *folder = sdpackages_extra_folder(i);
+	if (!folder || !out || !size) return false;
+	char combined[SDPACKAGES_VERSION], generation[SDPACKAGES_VERSION], scoped[SDPACKAGES_VERSION];
+	bool have_combined = sdpackages_active(root, combined);
+	if (sdpackages_extra_generation(root, i, generation, scoped) &&
+		(!have_combined || version_at_least(scoped, combined)) &&
+		path_in(root, sdpackages_extra_base(i), folder, out, size)) {
+		memcpy(version, scoped, strlen(scoped) + 1);
+		return true;
+	}
+	if (have_combined && path_in(root, "packages", folder, out, size)) {
+		memcpy(version, combined, strlen(combined) + 1);
+		return true;
+	}
+	version[0] = 0;
+	return false;
+}
+
+bool sdpackages_component_version(const char *root, unsigned category, char version[SDPACKAGES_VERSION]) {
+	char path[1200];
+	version[0] = 0;
+	return component_path(root, category, path, sizeof(path), version);
+}
+
 bool sdpackages_path(const char *root, const char *folder, char *out, size_t size) {
 	if (!out || !size || !folder) return false;
 	out[0] = 0;
-	char combined[SDPACKAGES_VERSION], generation[SDPACKAGES_VERSION], scoped[SDPACKAGES_VERSION];
-	bool have_combined = sdpackages_active(root, combined);
-	for (unsigned i = 0; i < SD_EXTRAS_COUNT; ++i) {
-		if (strcmp(folder, sdpackages_extra_folder(i))) continue;
-		if (sdpackages_extra_generation(root, i, generation, scoped) &&
-			(!have_combined || version_at_least(scoped, combined)) && path_in(root, sdpackages_extra_base(i), folder, out, size)) return true;
-		break;
-	}
-	return path_in(root, "packages", folder, out, size);
+	char version[SDPACKAGES_VERSION];
+	for (unsigned i = 0; i < SD_EXTRAS_COUNT; ++i)
+		if (!strcmp(folder, sdpackages_extra_folder(i))) return component_path(root, i, out, size, version);
+	return false;
 }
 

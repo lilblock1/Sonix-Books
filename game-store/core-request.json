@@ -1,6 +1,6 @@
 {
   "id": "2048",
-  "version": "v1.0.0",
+  "version": "v1.1.0",
   "channel": "device-test",
   "runtime_abi": 1,
   "hardware_verified": false,

@@ -141,7 +141,12 @@ def main():
                 destination = tools / "licenses" / name / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(filename, destination)
-    metadata = {"protocol": "BK01", "target": args.target, "sources": SOURCES, "binaries": {}}
+    own_source = tools / "source"
+    own_source.mkdir(parents=True, exist_ok=True)
+    for filename in ("booktool.c", "build.py", "sources.json"):
+        shutil.copy2(HERE / filename, own_source / filename)
+    metadata = {"protocol": "BK01", "target": args.target, "sources": SOURCES, "binaries": {},
+                "sonix_source": "https://github.com/lilblock1/Sonix-Books/tree/" + os.environ.get("GITHUB_SHA", "codex/common-book-formats")}
     for filename in (tools / "sonix_booktool", tools / "mobitool"):
         metadata["binaries"][filename.name] = {"sha256": hashlib.sha256(filename.read_bytes()).hexdigest(), "bytes": filename.stat().st_size}
     (tools / "native-reader-sources.json").write_text(json.dumps(metadata, indent=2) + "\n")

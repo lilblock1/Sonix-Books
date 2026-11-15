@@ -30,6 +30,7 @@ def build(version, archives, output, require_r1=True):
     output.parent.mkdir(parents=True, exist_ok=True)
     entries, names, total = [], set(), 0
     native_ok = False
+    native_metadata = None
     with tempfile.TemporaryFile() as payload:
         for filename in archives:
             with zipfile.ZipFile(filename) as archive:
@@ -45,7 +46,8 @@ def build(version, archives, output, require_r1=True):
                     if mode & 0o170000 == 0o120000:
                         raise ValueError("symlinks are not package members")
                     if name == "Ebook/Tools/native-reader-sources.json":
-                        native_ok = json.loads(archive.read(info)).get("target") == "r1"
+                        native_metadata = json.loads(archive.read(info))
+                        native_ok = native_metadata.get("target") == "r1"
                     digest = hashlib.sha256()
                     compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
                     before, size = payload.tell(), 0
@@ -66,6 +68,13 @@ def build(version, archives, output, require_r1=True):
                         raise ValueError("too many SD package files")
         if require_r1 and (not native_ok or not {"ebook/tools/sonix_booktool", "ebook/tools/mobitool"} <= names):
             raise ValueError("the bundle must contain the verified R1 native reader pack")
+        if require_r1:
+            by_name = {entry["path"]: entry for entry in entries}
+            for name in ("sonix_booktool", "mobitool"):
+                actual = by_name["Ebook/Tools/" + name]
+                expected = native_metadata.get("binaries", {}).get(name, {})
+                if actual["bytes"] != expected.get("bytes") or actual["sha256"] != expected.get("sha256"):
+                    raise ValueError("native reader metadata/hash mismatch")
         if not entries:
             raise ValueError("empty SD package")
         manifest = json.dumps(dict(schema=1, version=version, target="r1", unpacked_bytes=total, files=entries),

@@ -2,7 +2,7 @@ name: R1 device binary
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'codex/common-book-formats']
     paths:
       - '.github/workflows/**'
       - 'sonix-packer/assets/**'
@@ -19,10 +19,15 @@ concurrency:
 
 jobs:
   checks:
+    if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[r1-check]') || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/books-build.yml
   native-readers:
+    needs: checks
+    if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[r1-check]') || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/native-readers.yml
   target:
+    needs: checks
+    if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[r1-check]') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

@@ -2,6 +2,8 @@
 import argparse
 import binascii
 import io
+import importlib.util
+import os
 import re
 import struct
 import subprocess
@@ -47,6 +49,14 @@ def fixtures(folder):
     fields = struct.pack('<IIBIIBBHI', len(data), len(data), 3, binascii.crc32(data) & 0xffffffff, 0, 20, 0x30, len(name), 0o100644)
     rar += rar_header(0x74, 0x8000, fields + name) + data + rar_header(0x7b, 0, b'')
     (folder / 'book.cbr').write_bytes(rar)
+    for extension in ('xps', 'oxps'):
+        namespace = 'http://schemas.microsoft.com/xps/2005/06'
+        with zipfile.ZipFile(folder / ('book.' + extension), 'w') as archive:
+            archive.writestr('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="fdseq" ContentType="application/vnd.ms-package.xps-fixeddocumentsequence+xml"/><Default Extension="fdoc" ContentType="application/vnd.ms-package.xps-fixeddocument+xml"/><Default Extension="fpage" ContentType="application/vnd.ms-package.xps-fixedpage+xml"/></Types>')
+            archive.writestr('_rels/.rels', f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r1" Type="{namespace}/fixedrepresentation" Target="/FixedDocSeq.fdseq"/></Relationships>')
+            archive.writestr('FixedDocSeq.fdseq', f'<FixedDocumentSequence xmlns="{namespace}"><DocumentReference Source="/Documents/1/FixedDoc.fdoc"/></FixedDocumentSequence>')
+            archive.writestr('Documents/1/FixedDoc.fdoc', f'<FixedDocument xmlns="{namespace}"><PageContent Source="/Documents/1/Pages/1.fpage"/></FixedDocument>')
+            archive.writestr('Documents/1/Pages/1.fpage', f'<FixedPage xmlns="{namespace}" Width="300" Height="400" xml:lang="en-US"><Path Fill="#FF000000" Data="M 10,10 L 100,10 100,100 10,100 Z"/></FixedPage>')
     objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
                b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
                b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']
@@ -74,19 +84,34 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('tool', type=Path)
     parser.add_argument('--kindle', action='store_true')
+    parser.add_argument('--frontend', action='store_true')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as temporary:
         folder = Path(temporary); fixtures(folder)
-        for extension in ('html', 'md', 'rtf', 'fb2', 'fbz', 'docx', 'odt', 'pdf', 'cbz', 'cbr', 'cbt'):
+        driver = None
+        if args.frontend:
+            root = Path(__file__).resolve().parents[2]
+            spec = importlib.util.spec_from_file_location('frontend', root / 'tests/test_ebookformats.py')
+            frontend = importlib.util.module_from_spec(spec); spec.loader.exec_module(frontend)
+            driver = folder / 'frontend'; frontend.compile_driver(driver)
+        def frontend_read(book):
+            if driver:
+                env = dict(os.environ, SONIX_BOOKTOOL=str(args.tool.resolve()))
+                return subprocess.check_output([str(driver), str(book), str(folder)], env=env, timeout=90)
+            return b''
+        for extension in ('html', 'md', 'rtf', 'fb2', 'fbz', 'docx', 'odt', 'pdf', 'xps', 'oxps', 'cbz', 'cbr', 'cbt'):
             book = folder / ('book.' + extension)
             pages, flags, _, _ = call(args.tool, 'info', book, folder)
             assert pages > 0
-            if extension in ('pdf', 'cbz', 'cbr', 'cbt'):
+            if extension in ('pdf', 'xps', 'oxps', 'cbz', 'cbr', 'cbt'):
                 _, _, _, image = call(args.tool, 'page', book, folder)
                 assert image.startswith(b'\x89PNG')
-            if extension not in ('cbz', 'cbr', 'cbt'):
+            if extension not in ('xps', 'oxps', 'cbz', 'cbr', 'cbt'):
                 _, _, text, _ = call(args.tool, 'text', book, folder)
                 assert b'Native reader sample.' in re.sub(rb'<[^>]+>', b'', text), (extension, text)
+            through_reader = frontend_read(book)
+            if driver and extension not in ('xps', 'oxps', 'cbz', 'cbr', 'cbt'):
+                assert b'Native reader sample.' in through_reader, (extension, through_reader)
             print(extension, 'passed', flush=True)
         (folder / 'bad.pdf').write_bytes(b'broken')
         call(args.tool, 'page', folder / 'bad.pdf', folder, success=False)
@@ -100,6 +125,8 @@ def main():
                 with zipfile.ZipFile(prepared.decode()) as archive:
                     assert any(name.endswith('.opf') for name in archive.namelist())
                 assert call(args.tool, 'prepare', book, folder)[2] == prepared
+                if driver:
+                    assert b'Native reader sample.' in frontend_read(book)
                 print(extension, 'passed', flush=True)
 
 

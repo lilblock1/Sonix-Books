@@ -1,9 +1,11 @@
 #include "src/system/ebook/ebook.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 int main(int argc, char **argv) {
-	assert(argc == 2);
+	assert(argc == 2 || argc == 3);
+	if (argc == 3) ebook_set_sd_root(argv[2]);
 	ebook_t *book = ebook_open(argv[1]);
 	if (!book) { fprintf(stderr, "%s\n", ebook_last_error()); return 1; }
 	assert(!strcmp(ebook_path(book), argv[1]));
@@ -11,6 +13,12 @@ int main(int argc, char **argv) {
 	uint64_t weight = 0;
 	for (uint32_t i = 0; i < ebook_spine_count(book); i++) {
 		weight += ebook_chapter_weight(book, i);
+		if (ebook_is_fixed(book)) {
+			assert(ebook_open_chapter(book, i));
+			assert(ebook_block_count(book) == 1 && ebook_block(book, 0)->type == EBOOK_BLOCK_IMAGE);
+			uint32_t bytes = 0; void *image = ebook_load_image(book, "native-page", &bytes);
+			assert(image && bytes > 24 && !memcmp(image, "\x89PNG\r\n\x1a\n", 8)); free(image);
+		}
 		assert(ebook_open_search_chapter(book, i));
 		assert(ebook_chapter_bytes(book) < 4 * 1024 * 1024);
 		const char *pool = ebook_chapter_text(book);

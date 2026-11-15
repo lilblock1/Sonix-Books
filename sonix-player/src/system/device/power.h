@@ -98,6 +98,9 @@ void power_screen_on(void);
 void power_screen_off(void);
 void power_toggle_screen(void);
 bool power_screen_is_on(void);
+// Only the offline book reader may park unused radios with the panel lit.
+// Called on the GUI thread at screen entry/exit.
+void power_set_offline_reading(bool active);
 
 // For the main loop, after every pass of lv_timer_handler(). LVGL starts its
 // animation timer again whenever an animation is created or ends, so the pause

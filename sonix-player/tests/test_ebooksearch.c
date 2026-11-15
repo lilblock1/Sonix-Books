@@ -125,3 +125,5 @@ int main(void) {
  puts("ebook search: styled spans, Unicode, exact offsets, snippets, limits, skipped chapters and cancellation passed");
  return 0;
 }
+
+void ebook_set_cancel(ebook_cancel_t cancel, void *user) { (void)cancel; (void)user; }

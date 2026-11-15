@@ -189,9 +189,9 @@ static void odt_nodes(fz_context *ctx, fz_buffer *out, fz_xml *node, unsigned de
 	for (; node; node = fz_xml_next(node)) {
 		const char *text = fz_xml_text(node), *tag = fz_xml_tag(node);
 		if (text) { while (*text) { int c; text += fz_chartorune(&c, text); rune(ctx, out, c); } continue; }
-		bool paragraph = tag && (!strcmp(tag, "text:p") || !strcmp(tag, "text:h"));
+		bool paragraph = tag && (!strcmp(tag, "p") || !strcmp(tag, "h"));
 		if (paragraph) append(ctx, out, "<p>");
-		if (tag && (!strcmp(tag, "text:line-break") || !strcmp(tag, "text:tab"))) append(ctx, out, " ");
+		if (tag && (!strcmp(tag, "line-break") || !strcmp(tag, "tab"))) append(ctx, out, " ");
 		odt_nodes(ctx, out, fz_xml_down(node), depth + 1);
 		if (paragraph) append(ctx, out, "</p>");
 	}
@@ -204,7 +204,7 @@ static fz_buffer *odt_html(fz_context *ctx, const char *path) {
 		xml = fz_read_archive_entry(ctx, archive, "content.xml");
 		if (fz_buffer_storage(ctx, xml, NULL) > 4u * 1024u * 1024u) fz_throw(ctx, FZ_ERROR_LIMIT, "ODT XML size");
 		tree = fz_parse_xml(ctx, xml, 1);
-		fz_xml *body = fz_xml_find_dfs(fz_xml_root(tree), "office:body", NULL, NULL);
+		fz_xml *body = fz_xml_find_dfs(fz_xml_root(tree), "body", NULL, NULL);
 		if (!body) fz_throw(ctx, FZ_ERROR_FORMAT, "ODT body missing");
 		out = fz_new_buffer(ctx, 4096); append(ctx, out, "<html><body>");
 		odt_nodes(ctx, out, fz_xml_down(body), 0); append(ctx, out, "</body></html>");

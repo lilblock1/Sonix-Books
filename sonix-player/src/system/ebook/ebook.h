@@ -31,6 +31,9 @@
 // ---------------------------------------------------------------------------
 
 typedef struct ebook ebook_t;
+typedef bool (*ebook_cancel_t)(void *user);
+// A worker may cancel its own native operations. State is thread-local.
+void ebook_set_cancel(ebook_cancel_t cancel, void *user);
 typedef enum {
 	EBOOK_FORMAT_UNSUPPORTED, EBOOK_FORMAT_EPUB, EBOOK_FORMAT_TEXT,
 	EBOOK_FORMAT_KINDLE, EBOOK_FORMAT_NATIVE

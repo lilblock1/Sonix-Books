@@ -133,14 +133,17 @@ def main():
         metadata["binaries"][filename.name] = {"sha256": hashlib.sha256(filename.read_bytes()).hexdigest(), "bytes": filename.stat().st_size}
     (tools / "native-reader-sources.json").write_text(json.dumps(metadata, indent=2) + "\n")
     if args.target == "r1":
-        report = subprocess.check_output([str(compiler) + "readelf", "-h", "-l", "-V", str(tools / "sonix_booktool")], text=True)
-        if "MIPS" not in report or "little endian" not in report:
-            raise ValueError("not a little-endian MIPS reader")
         import re
-        for version in re.findall(r"GLIBC_(\d+)\.(\d+)", report):
-            if tuple(map(int, version)) > (2, 19):
-                raise ValueError("reader requires newer glibc: " + ".".join(version))
-        (tools / "native-reader-elf.txt").write_text(report)
+        reports = []
+        for binary in (tools / "sonix_booktool", tools / "mobitool"):
+            report = subprocess.check_output([str(compiler) + "readelf", "-h", "-l", "-V", str(binary)], text=True)
+            if "MIPS" not in report or "little endian" not in report:
+                raise ValueError("not a little-endian MIPS reader: " + binary.name)
+            for version in re.findall(r"GLIBC_(\d+)\.(\d+)", report):
+                if tuple(map(int, version)) > (2, 19):
+                    raise ValueError("reader requires newer glibc: " + ".".join(version))
+            reports.append(binary.name + "\n" + report)
+        (tools / "native-reader-elf.txt").write_text("\n".join(reports))
     package = output / ("Sonix-Books-Native-Readers-" + args.target + ".zip")
     with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for filename in sorted((output / "Ebook").rglob("*")):

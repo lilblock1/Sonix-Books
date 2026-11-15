@@ -456,10 +456,26 @@ bool epub_parse_chapter(ebook_t *book, const char *xhtml) {
 			if (p.skip_depth > 0 || p.hidden_depth > 0) {
 				continue;
 			}
-			size_t len = epub_xml_unescape(decoded, sizeof(decoded), x.text, x.text_len);
-			if (!add_run(&p, decoded, len)) {
-				break;
+			// An XML text node can be much longer than the decoding scratch
+			// buffer. Decode every bounded slice, keeping entities and UTF-8
+			// scalars intact, instead of silently dropping its remaining bytes.
+			bool added = true;
+			for (size_t at = 0; at < x.text_len;) {
+				size_t end = x.text_len - at > 2048 ? at + 2048 : x.text_len;
+				if (end < x.text_len) {
+					size_t boundary = end;
+					while (boundary > at && ((unsigned char)x.text[boundary] & 0xc0) == 0x80) boundary--;
+					if (boundary > at) end = boundary;
+					for (size_t i = end; i > at; i--) {
+						if (x.text[i - 1] == ';') break;
+						if (x.text[i - 1] == '&') { if (i - 1 > at) end = i - 1; break; }
+					}
+				}
+				size_t len = epub_xml_unescape(decoded, sizeof(decoded), x.text + at, end - at);
+				if (!add_run(&p, decoded, len)) { added = false; break; }
+				at = end;
 			}
+			if (!added) break;
 			continue;
 		}
 

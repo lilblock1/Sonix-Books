@@ -84,8 +84,9 @@ void ebooksearch_run(const char *path, const char *query, ebooksearch_result_t *
 		prefix[i] = (uint16_t)j;
 	}
 	if (cancelled(out, cancel, user)) return;
+	ebook_set_cancel(cancel, user);
 	ebook_t *book = ebook_open(path);
-	if (!book) { out->status = EBOOKSEARCH_OPEN_FAILED; return; }
+	if (!book) { ebook_set_cancel(NULL, NULL); out->status = EBOOKSEARCH_OPEN_FAILED; (void)cancelled(out, cancel, user); return; }
 	out->chapters_total = ebook_spine_count(book);
 	uint64_t chapter_bytes = 0, text_bytes = 0;
 	unsigned checkpoint = 0;
@@ -138,4 +139,5 @@ void ebooksearch_run(const char *path, const char *query, ebooksearch_result_t *
 	}
 done:
 	ebook_close(book);
+	ebook_set_cancel(NULL, NULL);
 }

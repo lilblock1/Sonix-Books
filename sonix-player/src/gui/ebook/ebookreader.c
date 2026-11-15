@@ -2996,6 +2996,10 @@ void ebookreader_open(const char *path) {
 		return;
 	}
 	if (book) {
+		zoom_close(); walk_reset(); position_save();
+		if (page_box) lv_obj_clean(page_box);
+		if (page_spare) lv_obj_clean(page_spare);
+		if (count_box) lv_obj_clean(count_box);
 		ebook_close(book);
 		book = NULL;
 	}

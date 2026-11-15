@@ -21,6 +21,10 @@
 extern char **environ;
 static char sd_root[800];
 static _Thread_local const char *last_error;
+static _Thread_local ebook_cancel_t operation_cancel;
+static _Thread_local void *operation_user;
+void ebook_set_cancel(ebook_cancel_t cancel, void *user) { operation_cancel = cancel; operation_user = user; }
+static bool native_cancelled(void) { return operation_cancel && operation_cancel(operation_user); }
 static pthread_mutex_t tools_lock = PTHREAD_MUTEX_INITIALIZER;
 static char copied_from[1200], copied_to[1200];
 
@@ -103,6 +107,7 @@ static int64_t now_ms(void) {
 static bool read_exact(int fd, void *target, size_t size, int64_t deadline) {
 	unsigned char *bytes = target;
 	while (size) {
+		if (native_cancelled()) return false;
 		int64_t left = deadline - now_ms();
 		if (left <= 0) return false;
 		struct pollfd p = {.fd = fd, .events = POLLIN};
@@ -177,7 +182,7 @@ bool ebook_native_call(const char *path, const char *operation, uint32_t page, e
 	close(pipe_fd[0]);
 	int result = 0;
 	bool reaped = false;
-	while (ok && now_ms() < deadline) {
+	while (ok && !native_cancelled() && now_ms() < deadline) {
 		pid_t waited = waitpid(child, &result, WNOHANG);
 		if (waited == child) { reaped = true; break; }
 		if (waited < 0 && errno != EINTR) { ok = false; break; }

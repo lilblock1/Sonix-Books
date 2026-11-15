@@ -157,6 +157,12 @@ def build(base, player, repository, output):
         new_info["build_version"] = datetime.now(timezone.utc).strftime("%d%m%Y%H%M")
         (root / INFO).write_text(json.dumps(new_info, indent=4) + "\n")
         after = snapshot(root)
+        # Optional reader engines and data belong to the SD bundle. Refuse
+        # accidental packaging even if a future compression change makes it fit.
+        sd_only = {"sonix_booktool", "mobitool", "Sonix-Books-SD-Packages.spk",
+                   "Sonix-Books-Fonts.zip", "Sonix-Books-Dictionary.zip"}
+        require(not any(Path(p).name in sd_only or p.lower().endswith(".sxd") for p in after),
+                "An SD-only reader package was embedded in internal firmware")
         changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
         allowed = {"usr/bin/sonix_player", INFO} | language_changes
         require(set(changed) <= allowed, "An unexpected system file changed")
@@ -173,7 +179,9 @@ def build(base, player, repository, output):
         report.update(version=new_info["OS_version"], changed_files=changed,
                       kernel_sha256=digest(images["xImage"]), kernel_content_unchanged=True,
                       base_rootfs_bytes=len(images["rootfs.squashfs"]), rootfs_bytes=len(data),
-                      rootfs_limit_policy="not larger than the pinned base image")
+                      rootfs_limit_policy="not larger than the pinned base image",
+                      sd_packages_embedded=False,
+                      internal_headroom_bytes=len(images["rootfs.squashfs"]) - len(data))
         (output / "r1-build-report.json").write_text(json.dumps(report, indent=2) + "\n")
         require(len(data) <= len(images["rootfs.squashfs"]),
                 f"Candidate rootfs {len(data)} exceeds known base {len(images['rootfs.squashfs'])}. Device partition proof is required before raising this limit.")

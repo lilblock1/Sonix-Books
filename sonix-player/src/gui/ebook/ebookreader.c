@@ -11,6 +11,7 @@
 #include "src/system/input/readingkeys.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookbar.h"
+#include "src/gui/ebook/ebookfind.h"
 #include "src/gui/ebook/ebookfonts.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
@@ -94,6 +95,9 @@ static gui_config_t *g_cfg;
 
 static ebook_t *book;
 static ebookprogress_t reader_progress;
+static ebook_position_t search_origin;
+static int32_t search_scroll = -1;
+static bool search_suspending;
 // Two boxes, not one: the slide needs the page it is leaving and the page it is
 // arriving at on screen together. `page_box` is always the one being read;
 // `page_spare` is the other, empty and parked off-screen between turns. In the
@@ -1491,7 +1495,7 @@ static void render_vertical(void) {
 // when the chapter is one long list.
 static void vertical_scrolled_cb(lv_event_t *e) {
 	(void)e;
-	if (!book || turn_mode() != TURN_VERTICAL) {
+	if (!book || search_suspending || ebookfind_active() || turn_mode() != TURN_VERTICAL) {
 		return;
 	}
 	int32_t top = lv_obj_get_scroll_y(page_box);
@@ -2023,6 +2027,7 @@ bool ebookreader_key(gui_key_t key) {
 	if (!book || lv_screen_active() != ebookreader_screen) {
 		return false;
 	}
+	if (ebookfind_key(key)) return true;
 	bool menu_visible = menu_veil && !lv_obj_is_hidden(menu_veil);
 	if (key == GUI_KEY_PLAY_PAUSE) {
 		if (menu_visible) {
@@ -2107,6 +2112,51 @@ static void close_book_cb(lv_event_t *e) {
 	(void)e;
 	menu_close();
 	back_btn_cb(NULL); // what the chevron would do, which is not drawn here
+}
+
+static void find_restore(ebook_position_t position, bool picked) {
+	if (!book || lv_screen_active() != ebookreader_screen) return;
+	bool restore_origin = !picked;
+	bool opened = load_chapter(position.spine, position.block, position.offset);
+	if (!opened && picked) {
+		opened = load_chapter(search_origin.spine, search_origin.block, search_origin.offset);
+		restore_origin = true;
+		gui_notify_popup("Could not open that search result.");
+	}
+	if (!opened) {
+		gui_notify_popup("ebookreader_open_failed");
+		back_btn_cb(NULL);
+		return;
+	}
+	if (restore_origin && search_scroll >= 0 && turn_mode() == TURN_VERTICAL)
+		lv_obj_scroll_to_y(page_box, search_scroll, LV_ANIM_OFF);
+	/* Drop page presses queued while the search overlay had focus. */
+	readingkeys_enter(readingkeys_mode());
+}
+
+static void find_open_cb(lv_event_t *e) {
+	(void)e;
+	if (!book || !ebook_chapter_loaded(book)) return;
+	position_save();
+	search_origin = (ebook_position_t){ebook_chapter_index(book), page_block, page_offset};
+	search_scroll = turn_mode() == TURN_VERTICAL ? lv_obj_get_scroll_y(page_box) : -1;
+	menu_close();
+	readingkeys_enter(readingkeys_mode());
+	search_suspending = true;
+	lv_anim_delete(page_box, NULL);
+	lv_anim_delete(page_spare, NULL);
+	turning = false;
+	walk_reset();
+	lv_obj_clean(page_box);
+	lv_obj_clean(page_spare);
+	lv_obj_clean(count_box);
+	lv_obj_set_x(page_box, 0);
+	lv_obj_set_x(page_spare, (int32_t)g_cfg->screen_width);
+	/* The scanner may parse a large chapter. Release ours before its first
+	 * request, and restore only after that worker has closed its book. */
+	ebook_close_chapter(book);
+	ebookfind_open(ebook_path(book), search_origin);
+	search_suspending = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -2577,9 +2627,10 @@ static void build_menu(gui_config_t *cfg) {
 	bar_button(icons, &icon_ebook_font, "ebookreader_font_settings", SECTION_FONT);
 	bar_button(icons, &icon_ebook_theme, "ebookreader_book_theme", SECTION_THEME);
 
-	// Under the three, separated: leaving is not a fourth thing to look at
-	// while reading, but it has to be somewhere and this is the only panel the
-	// reader has.
+	lv_obj_t *find_row = settingsrow_action(menu_bar, "Find in book", find_open_cb, NULL);
+	lv_obj_set_height(find_row, 60);
+
+	// Leaving sits in its own row underneath the reading tools.
 	lv_obj_t *close_row = lv_btn_create(menu_bar);
 	lv_obj_set_size(close_row, lv_pct(100), 68);
 	// Same reason as the card below: on the light theme a card on a panel is
@@ -2677,6 +2728,7 @@ static void reader_loaded_cb(lv_event_t *e) {
 static void reader_unloaded_cb(lv_event_t *e) {
 	(void)e;
 	readingkeys_leave();
+	ebookfind_abort();
 	back_btn_force_hidden(false);
 	topbar_set_hidden(false);
 
@@ -2856,6 +2908,7 @@ void ebookreader_init(gui_config_t *cfg) {
 	lv_obj_align(status_bar.root, LV_ALIGN_BOTTOM_MID, 0, -6);
 
 	build_menu(cfg);
+	ebookfind_init(cfg, ebookreader_screen, find_restore);
 
 	// No switcher_attach_back_gesture() here, deliberately: the swipe-back and
 	// the page turn are the same gesture, and the page turn is the one a reader

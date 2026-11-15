@@ -11,7 +11,7 @@ Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 2. [x] Per-book progress and New/Reading/Finished labels on the shelf (source and local checks; device validation pending).
 3. [x] Recently read shelf for multiple books (12-book history; source and local checks; device validation pending).
 4. [x] Reading-specific physical-button mapping, including optional volume-key page turns (source and local checks; device validation pending).
-5. [ ] Search inside books and jump to a result.
+5. [x] Search inside books and jump to a result (source and local checks; device validation pending).
 6. [ ] SD-card font selection with preview.
 7. [ ] Named bookmarks and notes.
 8. [ ] Offline dictionary lookup from the reader.
@@ -21,4 +21,4 @@ Implementation constraints: 64 MB device RAM; bounded background work; keep
 existing reading positions/bookmarks compatible. Distinguish verified tests
 from first-device validation. Do not publish a stable release automatically.
 
-Items 1–4 usage, limits and validation: [READING_LIBRARY.md](READING_LIBRARY.md).
+Items 1–5 usage, limits and validation: [READING_LIBRARY.md](READING_LIBRARY.md).

@@ -13,6 +13,7 @@
 #endif
 
 #include "ebook.h"
+#include "ebooktext.h"
 
 /* Internal ordering; the five user-selectable library sorts stay unchanged. */
 #define SORT_RECENT ((ebooklibrary_sort_t)EBOOKLIBRARY_SORT_COUNT)
@@ -42,30 +43,7 @@ static void copy_text(char *out, size_t size, const char *text) {
 	for (size_t i = 0; i < n; i++) if ((unsigned char)out[i] < 32) out[i] = ' ';
 }
 
-/* UTF-8 comparison without locale/global state. Simple casing for Latin,
- * Greek and Cyrillic; other code points (including CJK) compare literally. */
-static uint32_t next_folded(const char **p) {
-	const unsigned char *s = (const unsigned char *)*p;
-	uint32_t c = *s++;
-	unsigned more = 0;
-	if (c >= 0xc2 && c <= 0xdf) { c &= 31; more = 1; }
-	else if (c >= 0xe0 && c <= 0xef) { c &= 15; more = 2; }
-	else if (c >= 0xf0 && c <= 0xf4) { c &= 7; more = 3; }
-	for (unsigned i = 0; i < more; i++) {
-		if ((*s & 0xc0) != 0x80) break;
-		c = (c << 6) | (*s++ & 63);
-	}
-	*p = (const char *)s;
-	if ((c >= 'A' && c <= 'Z') || (c >= 0xc0 && c <= 0xde && c != 0xd7) ||
-		(c >= 0x391 && c <= 0x3ab && c != 0x3a2) || (c >= 0x410 && c <= 0x42f)) c += 32;
-	else if (c >= 0x400 && c <= 0x40f) c += 80;
-	else if ((c >= 0x100 && c <= 0x12f && !(c & 1)) ||
-			 (c >= 0x132 && c <= 0x137 && !(c & 1)) ||
-			 (c >= 0x14a && c <= 0x177 && !(c & 1))) c++;
-	else if (c == 0x178) c = 0xff;
-	else if (c == 0x3c2) c = 0x3c3;
-	return c;
-}
+static uint32_t next_folded(const char **p) { return ebooktext_next_folded(p); }
 
 static int text_compare(const char *a, const char *b) {
 	while (*a && *b) {

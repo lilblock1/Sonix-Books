@@ -80,7 +80,7 @@ jobs:
         working-directory: sonix-player
         run: |
           gcc -std=c11 -Wall -Wextra -Werror -I. \
-            tests/test_ebooklibrary.c src/system/ebook/ebooklibrary.c \
+            tests/test_ebooklibrary.c src/system/ebook/ebooklibrary.c src/system/ebook/ebooktext.c \
             -o build_tests/test_ebooklibrary
           fixture=$(mktemp -d)
           trap 'rm -rf -- "$fixture"' EXIT
@@ -104,6 +104,16 @@ jobs:
           fixture=$(mktemp -d)
           trap 'rm -rf -- "$fixture"' EXIT
           ./build_tests/test_readingkeys "$fixture"
+      - name: Test in-book search matching and bounded scans
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. \
+            tests/test_ebooksearch.c src/system/ebook/ebooksearch.c \
+            src/system/ebook/ebooktext.c -o build_tests/test_ebooksearch
+          ./build_tests/test_ebooksearch
+      - name: Test result jumps in a compressed EPUB
+        working-directory: sonix-player
+        run: python3 tests/test_ebooksearch_epub.py
       - name: Check language resources and fork update destination
         run: python3 sonix-player/tests/check_resources.py
       - name: Test Wi-Fi update policy

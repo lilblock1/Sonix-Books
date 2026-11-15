@@ -1,4 +1,4 @@
-# Reading library — items 1–4
+# Reading library — items 1–5
 
 Source work on `reading-overhaul`; no firmware update has been built or
 published for this feature. Keep the tested `main` firmware until the complete
@@ -109,6 +109,46 @@ read atomic context snapshots and post actions through the existing GUI bridge;
 all widget access remains on the UI thread. The setting uses one ebook-config
 key (volume_pages), read on the UI thread and preserved across restarts.
 
+## Find in book — item 5
+
+Open the reader menu with Play/Pause or a centre long press, then tap **Find in
+book**. Type text and press the keyboard's Search key. Results show chapter
+numbers and excerpts; tap one to jump to the matching text. **Back** or
+Play/Pause cancels and restores the original place, including the scroll
+position in scrolling mode. Closing a book cancels search without restoring a
+chapter in a screen that is no longer active.
+
+Search is literal and case insensitive using the library's shared simple
+Unicode folding. Whitespace runs are treated as a single space. Phrases can
+cross bold/italic span boundaries within a paragraph, heading, quote or list
+item. Matches do not cross paragraph/block boundaries. Image filenames and
+rules are excluded. There is no regex, fuzzy matching, or full Unicode
+normalization. Search result offsets refer to original book bytes rather than
+an altered or normalized copy.
+
+Searching does not change reading progress, bookmarks or history. A selected
+result becomes the new reading position through the ordinary reader save path.
+If a result cannot be loaded, the reader tries to restore its original chapter.
+An unavailable book uses the existing error/return path.
+
+For the 64 MB R1, the reader releases its displayed chapter and images before
+building the search overlay. A single background worker opens its own handle
+and parses one chapter at a time; it does not decode images or hold the whole
+book. Closing search waits asynchronously until the worker has closed its book
+before restoring the reader chapter. New queries replace pending requests;
+late results from cancelled queries are discarded. Physical page keys are
+consumed while Find is open, and fresh input sessions discard queued commands
+when focus returns to the reader.
+
+Search retains at most 100 hits with 192-byte UTF-8 excerpts. Queries are
+bounded to 256 bytes/96 normalized characters (the keyboard limits input to
+60 characters). A scan examines at most 64 MiB of chapter content and 64 MiB of
+visible text, reporting limits rather than claiming an exhaustive search.
+Unreadable chapters are skipped and counted. Cancellation is checked between
+chapters/spans and every 1024 decoded characters; a chapter parser already in
+progress finishes before cancellation can release it. The UI shows chapter
+progress and remains available for cancelling.
+
 ## Resource limits
 
 The R1 has 64 MB RAM. Scans run on one background worker, cancel between files,
@@ -128,6 +168,19 @@ leave its lookahead area, and can be requested again on return.
 ## Validation
 
 Local checks completed:
+
+- Search tests: phrases across styled spans, whitespace folding, Latin/Greek/
+  Cyrillic casing and CJK matches, literal symbols, original byte offsets,
+  overlapping results, bounded UTF-8 excerpts, empty/long queries, skipped
+  chapters, cancellation, scan limits and the 100-result cap.
+- A generated compressed EPUB exercises the real ZIP/OPF/XHTML engine, entity
+  decoding, styled-phrase matching, isolation from an existing reader handle,
+  and loading every returned chapter/block/byte offset. The local Windows run
+  used the previously documented test-only virtual-memory arena adapter.
+- Library scanner regressions passed after sharing the bounded UTF-8 decoder.
+  The search model, shared decoder, Find overlay and reader compiled with Linux
+  headers/LVGL 9.6 and warnings treated as errors. Full UI and device validation
+  remains deferred to the combined build.
 
 - Reading-button tests: default case bindings; both volume-page directions;
   settings persistence/defaults; one action after arbitrarily repeated holds;
@@ -186,7 +239,7 @@ Run the scanner tests from `sonix-player` on Linux:
 ```sh
 mkdir -p build_tests
 gcc -std=c11 -Wall -Wextra -Werror -I. \
-  tests/test_ebooklibrary.c src/system/ebook/ebooklibrary.c \
+  tests/test_ebooklibrary.c src/system/ebook/ebooklibrary.c src/system/ebook/ebooktext.c \
   -o build_tests/test_ebooklibrary
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
@@ -226,6 +279,16 @@ gcc -std=c11 -Wall -Wextra -Werror -I. \
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 ./build_tests/test_readingkeys "$fixture"
+~~~
+
+Run in-book search tests from sonix-player on Linux:
+
+~~~sh
+gcc -std=c11 -Wall -Wextra -Werror -I. \
+  tests/test_ebooksearch.c src/system/ebook/ebooksearch.c \
+  src/system/ebook/ebooktext.c -o build_tests/test_ebooksearch
+./build_tests/test_ebooksearch
+python3 tests/test_ebooksearch_epub.py
 ~~~
 
 The existing checks workflow will run these tests when it is eventually invoked

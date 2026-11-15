@@ -30,7 +30,7 @@ static unsigned game_count,rom_count;
 static uint16_t *pixels,buttons;
 static uint32_t seen;
 static lv_image_dsc_t image;
-static bool held;
+static bool held,raw_claimed;
 static uint16_t raw_previous;
 static atomic_uint session_generation;
 static gbinput_zone_t zones[16];
@@ -98,7 +98,7 @@ static void unloaded(lv_event_t *e) {
 	(void)e;
 	lv_timer_pause(timer);
 	atomic_fetch_add(&session_generation,1);
-	if(gbinput_active())gbinput_stop();
+	if(raw_claimed){gbinput_stop();raw_claimed=false;}
 	nativegame_stop();
 	nativegame_keys(0);buttons=0;
 	lv_image_set_src(picture,NULL);image.data=NULL;free(pixels);pixels=NULL;
@@ -148,7 +148,7 @@ static void launch(const char *rom) {
 	held=true;power_hold_screen_on(true);
 	raw_previous=0;atomic_fetch_add(&session_generation,1);
 	gbinput_set_glass(config->screen_width,config->screen_height);
-	(void)gbinput_start_for(zones,(int)zone_count,raw_exit,raw_keys);
+	raw_claimed=gbinput_start_for(zones,(int)zone_count,raw_exit,raw_keys);
 	lv_timer_resume(timer);lv_timer_ready(timer);
 }
 static void launch_no_rom(lv_event_t *e) {(void)e;launch(NULL);}
@@ -159,6 +159,7 @@ static void launch_rom(lv_event_t *e) {
 static void show_roms(lv_event_t *e) {
 	unsigned i=(unsigned)(uintptr_t)lv_event_get_user_data(e);
 	if(i>=game_count||!available())return;
+	if(!gui_card_available()){gui_notify_no_card();return;}
 	snprintf(chosen,sizeof(chosen),"%s",games[i]);
 	lv_obj_clean(rom_list);rom_count=0;
 	settingsrow_action(rom_list,"Launch without ROM",launch_no_rom,NULL);
@@ -173,7 +174,7 @@ static void show_roms(lv_event_t *e) {
 				char full[1400];int m=snprintf(full,sizeof(full),"%s/%s",path,entry->d_name);
 				struct stat st;
 				if(m<=0||(size_t)m>=sizeof(full)||lstat(full,&st)||!S_ISREG(st.st_mode))continue;
-				snprintf(roms[rom_count],sizeof(roms[0]),"%s",entry->d_name);
+				memcpy(roms[rom_count],entry->d_name,strlen(entry->d_name)+1);
 				settingsrow_action(rom_list,roms[rom_count],launch_rom,(void*)(uintptr_t)rom_count);
 				++rom_count;
 			}

@@ -1330,7 +1330,6 @@ static void *wifi_worker(void *arg) {
 			case JOB_POWER:
 				do_power(job.arg_int != 0);
 				pthread_mutex_lock(&lock);
-				g_power_busy = false;
 				if (!job.arg_int) {
 					memset(&g_status, 0, sizeof(g_status));
 					g_status.state = WIFI_STATE_OFF;
@@ -1344,6 +1343,9 @@ static void *wifi_worker(void *arg) {
 					// The settings page requests its own discovery sweep.
 					if (job.arg_int == 1) do_scan();
 				}
+				pthread_mutex_lock(&lock);
+				g_power_busy = false;
+				pthread_mutex_unlock(&lock);
 				break;
 
 			case JOB_SCAN:
@@ -1428,6 +1430,12 @@ static void set_enabled(bool on, bool remember) {
 	pthread_mutex_lock(&lock);
 	if (g_enabled == on) {
 		pthread_mutex_unlock(&lock);
+		// Explicit off while the power saver has already parked the radio
+		// must still override the saved preference.
+		if (remember && config_get_int("wireless", "wifi", 0) != (int)on) {
+			config_set_int("wireless", "wifi", on ? 1 : 0);
+			config_save();
+		}
 		return;
 	}
 	g_enabled = on;
@@ -1458,7 +1466,7 @@ void wifi_set_enabled_transient(bool on) { set_enabled(on, false); }
 
 bool wifi_busy(void) {
 	pthread_mutex_lock(&lock);
-	bool busy = g_power_busy;
+	bool busy = g_power_busy || g_op == WIFI_OP_BUSY || queue_count > 0;
 	pthread_mutex_unlock(&lock);
 	return busy;
 }

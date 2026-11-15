@@ -2,7 +2,7 @@ name: R1 device binary
 
 on:
   push:
-    branches: [main, 'codex/common-book-formats', battery-optimization]
+    branches: [main, 'codex/common-book-formats', battery-optimization, downloadable-extras]
     paths:
       - '.github/workflows/**'
       - 'sonix-packer/assets/**'
@@ -146,6 +146,10 @@ jobs:
           python3 sonix-player/tools/build_sd_packages.py --version "$tag" --output Sonix-Books-SD-Packages.spk \
             extras/reading-fonts/Sonix-Books-Fonts.zip dictionary-pack/Sonix-Books-Dictionary.zip \
             native-r1/Sonix-Books-Native-Readers-r1.zip > sd-packages-report.json
+          mkdir -p individual-extras
+          python3 sonix-player/tools/build_sd_packages.py --version "$tag" --component Fonts --output individual-extras/Sonix-Books-Extra-Fonts.spk extras/reading-fonts/Sonix-Books-Fonts.zip > individual-extras/fonts-report.json
+          python3 sonix-player/tools/build_sd_packages.py --version "$tag" --component Dictionaries --output individual-extras/Sonix-Books-Extra-Dictionary.spk dictionary-pack/Sonix-Books-Dictionary.zip > individual-extras/dictionary-report.json
+          python3 sonix-player/tools/build_sd_packages.py --version "$tag" --component Tools --output individual-extras/Sonix-Books-Extra-Readers.spk native-r1/Sonix-Books-Native-Readers-r1.zip > individual-extras/readers-report.json
       - name: Install the complete production bundle with the real streaming installer
         working-directory: sonix-player
         run: |
@@ -161,6 +165,30 @@ jobs:
               assert result == '0 ' + report['version'], result
           print(report)
           PY
+      - name: Install each production extra independently on a clean card
+        working-directory: sonix-player
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, tempfile
+          packages = pathlib.Path('../individual-extras')
+          names = ('Fonts', 'Dictionary', 'Readers')
+          reports = ('fonts', 'dictionary', 'readers')
+          folders = ('packages-fonts', 'packages-dictionaries', 'packages-tools')
+          with tempfile.TemporaryDirectory() as temporary:
+              card = pathlib.Path(temporary)
+              for i, (name, report_name) in enumerate(zip(names, reports)):
+                  report = json.loads((packages / (report_name + '-report.json')).read_text())
+                  asset = packages / ('Sonix-Books-Extra-' + name + '.spk')
+                  result = subprocess.check_output(['./sd-install-check', str(card), str(asset),
+                      report['version'], report['sha256'], '0', str(i)], text=True).strip()
+                  assert result == '0 ' + report['version'], result
+                  assert {p.name for p in (card / '.sonix').iterdir()} == set(folders[:i+1])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonix-books-individual-extras
+          path: individual-extras/
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         with:
           name: sonix-books-sd-packages
@@ -194,6 +222,10 @@ jobs:
         with:
           name: sonix-books-sd-packages
           path: sd-packages
+      - uses: actions/download-artifact@v4
+        with:
+          name: sonix-books-individual-extras
+          path: individual-extras
       - name: Verify the completed candidate for a test release
         env:
           TEST_BUILD: ${{ github.run_number }}
@@ -221,6 +253,7 @@ jobs:
           NOTES
           gh release create "$tag" candidate/r1.upt candidate/SHA256SUMS candidate/r1-build-report.json \
             sd-packages/Sonix-Books-SD-Packages.spk sd-packages/Sonix-Books-SD-Packages.spk.sha256 sd-packages/sd-packages-report.json \
+            individual-extras/*.spk individual-extras/*.sha256 individual-extras/*-report.json \
             native-r1/Sonix-Books-Native-Readers-r1.zip native-r1/Sonix-Books-Native-Readers-r1.zip.sha256 \
             extras/reading-fonts/Sonix-Books-Fonts.zip extras/reading-fonts/Sonix-Books-Fonts.zip.sha256 \
             dictionary-pack/Sonix-Books-Dictionary.zip dictionary-pack/Sonix-Books-Dictionary.zip.sha256 \

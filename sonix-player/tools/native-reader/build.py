@@ -58,6 +58,12 @@ def main():
         cpu_flags = ["-march=mips32r2", "-mno-madd4", "-mplt", "-include", str(ROOT / "src/system/core/glibc_compat.h")]
     else:
         cc, cxx, ar, strip, ranlib = "gcc", "g++", "ar", "strip", "ranlib"
+    if args.target == "host":
+        # Exercise the R1 compatibility implementation without a newer libc dependency.
+        entropy_test = build / "test_getentropy_compat"
+        run(cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-DSONIX_TEST_GETENTROPY",
+            HERE / "getentropy_compat.c", "-o", entropy_test, env=env)
+        run(entropy_test, env=env)
     flags = " ".join(["-Os", "-ffunction-sections", "-fdata-sections"] + cpu_flags)
     sources = {name: checkout(name, spec, work) for name, spec in SOURCES.items()}
 
@@ -131,7 +137,15 @@ def main():
     obj = build / "booktool.o"
     run(cc, "-std=c11", "-Wall", "-Wextra", "-Werror", *flags.split(), "-I" + str(ROOT), "-I" + str(mupdf / "include"),
         "-I" + str(prefix / "include"), "-c", HERE / "booktool.c", "-o", obj, env=env)
-    run(cxx, "-Wl,--gc-sections", "-static-libstdc++", "-static-libgcc", *cpu_flags, obj,
+    compatibility = []
+    if args.target == "r1":
+        entropy_obj = build / "getentropy_compat.o"
+        run(cc, "-std=c11", "-Wall", "-Wextra", "-Werror", *flags.split(),
+            "-c", HERE / "getentropy_compat.c", "-o", entropy_obj, env=env)
+        # Archive references resolve to our local implementation; retain the
+        # existing strict symbol-version gate for every reader binary.
+        compatibility = ["-Wl,--wrap=getentropy", entropy_obj]
+    run(cxx, "-Wl,--gc-sections", "-static-libstdc++", "-static-libgcc", *cpu_flags, obj, *compatibility,
         mupdf_lib / "libmupdf.a", mupdf_lib / "libmupdf-third.a", prefix / "lib/libarchive.a", prefix / "lib/libmobi.a",
         "-lm", "-lpthread", "-ldl", "-o", tools / "sonix_booktool", env=env)
     shutil.copy2(prefix / "bin/mobitool", tools / "mobitool")
@@ -147,7 +161,7 @@ def main():
                 shutil.copy2(filename, destination)
     own_source = tools / "source"
     own_source.mkdir(parents=True, exist_ok=True)
-    for filename in ("booktool.c", "build.py", "sources.json"):
+    for filename in ("booktool.c", "build.py", "sources.json", "getentropy_compat.c"):
         shutil.copy2(HERE / filename, own_source / filename)
     metadata = {"protocol": "BK01", "target": args.target, "sources": SOURCES, "binaries": {},
                 "sonix_source": "https://github.com/lilblock1/Sonix-Books/tree/" + os.environ.get("GITHUB_SHA", "codex/common-book-formats")}

@@ -35,6 +35,7 @@
 #include "src/system/gearboy/gbdb.h"
 #include "src/system/input/hookclicks.h"
 #include "src/system/input/keymap.h"
+#include "src/system/input/readingkeys.h"
 #include "src/system/core/panel.h"
 #include "src/system/streaming/qobuzcache.h"
 #include "src/system/streaming/podcastcache.h"
@@ -1474,6 +1475,7 @@ static bool mapped_action_repeats(keymap_button_t button) {
 #define SEEK_STEP_SECONDS 5.0
 
 static bool mapped_action_seeks(keymap_button_t button) {
+	if (readingkeys_active()) return false;
 	keymap_action_t action = effective_action(button);
 	return action == KEYMAP_ACTION_NEXT || action == KEYMAP_ACTION_PREV;
 }
@@ -1484,6 +1486,7 @@ static bool mapped_action_seeks(keymap_button_t button) {
 // Refuses on anything with no position to move along -- a live radio stream has
 // neither a length nor a point to come back to.
 static void seek_step(keymap_button_t button) {
+	if (readingkeys_active()) return;
 	keymap_action_t action = effective_action(button);
 	if (action != KEYMAP_ACTION_NEXT && action != KEYMAP_ACTION_PREV) {
 		return;
@@ -1536,6 +1539,10 @@ static void repeat_held(int code, bool headset) {
 		return;
 	}
 	keymap_button_t button = keymap_button_for_code(code);
+	/* A context change during an in-flight hold must not turn its next repeat
+	 * into a page action, or keep seeking background music. */
+	keymap_action_t action = effective_action(button);
+	if (readingkeys_active() && (action == KEYMAP_ACTION_NEXT || action == KEYMAP_ACTION_PREV)) return;
 	if (mapped_action_seeks(button)) {
 		seek_step(button);
 		return;
@@ -1697,6 +1704,8 @@ static void *input_thread_func(void *arg) {
 	uint32_t dbl_until = 0;
 	// The held key has already repeated its action: its release is not a click.
 	bool held_repeated = false;
+	readingkeys_tracker_t reading_keys = {0};
+	uint32_t held_epoch = readingkeys_epoch(), dbl_epoch = held_epoch;
 
 	for (;;) {
 		// The deadline is whatever the held key is waiting for; with nothing
@@ -1732,6 +1741,20 @@ static void *input_thread_func(void *arg) {
 				continue;
 			}
 			break;
+		}
+
+		/* A press that began before entering/leaving a reader is not a fresh
+		 * command in the new context. Drop pending music clicks/repeats. The
+		 * reader tracker separately retains ownership of its stale releases. */
+		uint32_t epoch = readingkeys_epoch();
+		if (!info->headset) {
+			if (dbl_code >= 0 && dbl_epoch != epoch) dbl_code = -1;
+			if (held >= 0 && keymap_button_for_code(held) != KEYMAP_BTN_COUNT && held_epoch != epoch) {
+				if (seeked) device_state_scrub_commit();
+				held = -1;
+				deferred = seeked = held_repeated = dbl_first = false;
+				override_button = KEYMAP_BTN_COUNT;
+			}
 		}
 
 		if (ready == 0) {
@@ -1856,7 +1879,19 @@ static void *input_thread_func(void *arg) {
 				override_action = keymap_double_action();
 			}
 
+			/* Reading owns raw case keys before music remapping, hold-seek and
+			 * double-click handling. Wait for release, so power combinations can
+			 * consume a volume press without also turning a page. */
+			if (readingkeys_handle(&reading_keys, keymap_button_for_code(ev.code), 1,
+				info->headset, combo, NULL)) {
+				held = -1;
+				deferred = seeked = held_repeated = dbl_first = false;
+				override_button = KEYMAP_BTN_COUNT;
+				continue;
+			}
+
 			held = ev.code;
+			held_epoch = readingkeys_epoch();
 			held_since = now_ms();
 			bool seeks = key_seeks_held(held, info->headset);
 			next_repeat = held_since + (seeks ? SEEK_HOLD_MS : VOLUME_REPEAT_DELAY_MS);
@@ -1905,6 +1940,12 @@ static void *input_thread_func(void *arg) {
 
 		if (ev.value == 0) {
 			bool combo = !info->headset && combo_release(ev.code);
+			readingkeys_event_t reading_event;
+			if (readingkeys_handle(&reading_keys, keymap_button_for_code(ev.code), 0,
+				info->headset, combo, &reading_event)) {
+				if (reading_event) gui_notify_reading_key(reading_event);
+				continue;
+			}
 
 			if (ev.code == KEY_POWER && !long_press_done && !combo) {
 				// Short press: the screen toggle.
@@ -1916,11 +1957,13 @@ static void *input_thread_func(void *arg) {
 					// A first click let go before it repeated or seeked: wait
 					// for a second one. Held into a repeat or a seek, it was a
 					// hold and not a click.
-					if (!held_repeated && !combo) {
+					if (!held_repeated && !combo && (info->headset || held_epoch == readingkeys_epoch())) {
 						dbl_code = ev.code;
+						dbl_epoch = held_epoch;
 						dbl_until = now_ms() + DOUBLE_CLICK_MS;
 					}
-				} else if (deferred && !seeked && !held_repeated && !combo) {
+				} else if (deferred && !seeked && !held_repeated && !combo &&
+					(info->headset || held_epoch == readingkeys_epoch())) {
 					// A skip button let go before it became a seek: now it
 					// skips. Likewise a deferred volume down let go before it
 					// started repeating.

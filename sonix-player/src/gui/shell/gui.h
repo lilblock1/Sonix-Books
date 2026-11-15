@@ -107,6 +107,10 @@ typedef enum {
 
 void gui_notify_key(gui_key_t key);
 
+// Case-button action owned by a particular reader session. Stale actions are
+// dropped on delivery and never fall back to music or another activity.
+void gui_notify_reading_key(uint32_t event);
+
 // New volume level, already applied to the hardware: this only updates what is
 // on screen.
 void gui_notify_volume(int percent);

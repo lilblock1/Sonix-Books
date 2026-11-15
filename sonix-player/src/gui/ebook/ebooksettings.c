@@ -9,6 +9,7 @@
 #include "src/gui/shell/switcher.h"
 #include "src/gui/shell/theme.h"
 #include "src/system/core/lang.h"
+#include "src/system/input/readingkeys.h"
 
 lv_obj_t *ebooksettings_screen;
 
@@ -43,6 +44,7 @@ static lv_obj_t *option_list;
 static lv_obj_t *switches[EBOOKBAR_COUNT];
 static lv_obj_t *scope_pills[EBOOKBAR_SCOPE_COUNT];
 static lv_obj_t *scope_row;
+static lv_obj_t *volume_pills[READINGKEYS_VOLUME_MODE_COUNT];
 static int list_top;	 // where the paper starts, and so where the list starts from
 static int32_t list_bottom;	 // the bottom of the screen, which is where the list ends
 
@@ -96,6 +98,18 @@ static void scope_refresh(void) {
 	}
 }
 
+static void controls_refresh(void) {
+	readingkeys_mode_t mode = readingkeys_mode();
+	for (int i = 0; i < READINGKEYS_VOLUME_MODE_COUNT; i++) {
+		if (volume_pills[i]) settingsrow_pill_active(volume_pills[i], i == (int)mode);
+	}
+}
+
+static void volume_mode_cb(lv_event_t *e) {
+	readingkeys_set_mode((readingkeys_mode_t)(intptr_t)lv_event_get_user_data(e));
+	controls_refresh();
+}
+
 // Which switch moved, worked out from the object rather than from user data:
 // settingsrow_toggle() attaches the callback itself and passes none, and adding
 // a second registration to carry an index would run this twice per press.
@@ -122,6 +136,7 @@ static void scope_cb(lv_event_t *e) {
 // to without being rebuilt.
 static void loaded_cb(lv_event_t *e) {
 	(void)e;
+	controls_refresh();
 	for (int i = 0; i < EBOOKBAR_COUNT; i++) {
 		if (!switches[i]) {
 			continue;
@@ -138,7 +153,7 @@ static void loaded_cb(lv_event_t *e) {
 
 // The pills are painted from the palette, so a theme change has to repaint the
 // chosen one.
-static void refresh_theme(void) { scope_refresh(); }
+static void refresh_theme(void) { scope_refresh(); controls_refresh(); }
 
 // Every page built by settingsrow_page() reopens at the top; this one builds
 // its own body, so it has to do that itself. On unload and not on load, for the
@@ -153,7 +168,7 @@ static void unloaded_cb(lv_event_t *e) {
 void ebooksettings_init(gui_config_t *cfg) {
 	ebooksettings_screen = lv_obj_create(NULL);
 	lv_obj_add_style(ebooksettings_screen, &theme_style_screen, 0);
-	settingsrow_title(ebooksettings_screen, cfg, "ebooksettings_reading_bar");
+	settingsrow_title(ebooksettings_screen, cfg, "Reading settings");
 
 	list_top = settingsrow_content_top(cfg);
 	list_bottom = (int32_t)cfg->screen_height;
@@ -200,6 +215,35 @@ void ebooksettings_init(gui_config_t *cfg) {
 	lv_obj_set_flex_align(option_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_gap(option_list, 12, 0);
 
+	settingsrow_heading(option_list, "Reading buttons");
+	lv_obj_t *volume_choices = NULL;
+	settingsrow_pills(option_list, "Volume button action", &volume_choices);
+	lv_obj_set_flex_flow(volume_choices, LV_FLEX_FLOW_ROW);
+	static const char *const labels[] = {"Volume", "Up: Back", "Up: Next"};
+	for (int i = 0; i < READINGKEYS_VOLUME_MODE_COUNT; i++) {
+		volume_pills[i] = settingsrow_pill_text(volume_choices, labels[i], i, volume_mode_cb);
+		lv_obj_set_width(volume_pills[i], 0);
+		lv_obj_set_flex_grow(volume_pills[i], 1);
+		lv_obj_set_style_pad_hor(volume_pills[i], 8, 0);
+		lv_obj_t *label = lv_obj_get_child(volume_pills[i], 0);
+		lv_obj_set_width(label, lv_pct(100));
+		lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+		lv_obj_set_style_text_font(label, &font_ui_20, 0);
+		lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+	}
+	controls_refresh();
+
+	lv_obj_t *controls_note = lv_label_create(option_list);
+	lv_label_set_long_mode(controls_note, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(controls_note, lv_pct(100));
+	lv_obj_add_style(controls_note, &theme_style_text_dim, 0);
+	lv_obj_set_style_text_font(controls_note, &font_ui_18, 0);
+	lv_label_set_text_fmt(controls_note, "%s\n\n%s", tr("books_reader_controls"),
+		"Up: Back uses volume up for the previous page and volume down for the next. Up: Next reverses them. "
+		"Volume keeps your usual volume-button actions. Holds produce one action on release. "
+		"Headphone volume buttons still adjust volume.");
+
+	settingsrow_heading(option_list, "ebooksettings_reading_bar");
 	for (int i = 0; i < EBOOKBAR_COUNT; i++) {
 		if (i == EBOOKBAR_PROGRESS) {
 			// The one option that is not only on or off: a line has to measure
@@ -214,12 +258,6 @@ void ebooksettings_init(gui_config_t *cfg) {
 		}
 		settingsrow_toggle(option_list, ebookbar_option_tag((ebookbar_option_t)i), &switches[i], option_cb);
 	}
-	lv_obj_t *controls_note = lv_label_create(option_list);
-	lv_label_set_long_mode(controls_note, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(controls_note, lv_pct(100));
-	lv_obj_add_style(controls_note, &theme_style_text_dim, 0);
-	lv_obj_set_style_text_font(controls_note, &font_ui_18, 0);
-	lv_label_set_text(controls_note, tr("books_reader_controls"));
 
 	relayout();
 

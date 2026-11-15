@@ -1,4 +1,5 @@
 #include "gui.h"
+#include "src/system/input/readingkeys.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -501,6 +502,20 @@ static void modal_init(gui_config_t *cfg) {
 }
 
 // --- notifications from the button threads ---
+
+static void reading_key_async_cb(void *user_data) {
+	readingkeys_action_t action = readingkeys_action((uint32_t)(uintptr_t)user_data);
+	gui_key_t key;
+	switch (action) {
+	case READINGKEYS_MENU: key = GUI_KEY_PLAY_PAUSE; break;
+	case READINGKEYS_NEXT: key = GUI_KEY_NEXT; break;
+	case READINGKEYS_PREV: key = GUI_KEY_PREV; break;
+	default: return;
+	}
+	(void)ebookreader_key(key); /* no music fallback if the screen changed */
+}
+
+void gui_notify_reading_key(uint32_t event) { gui_post(reading_key_async_cb, (void *)(uintptr_t)event); }
 
 static void key_async_cb(void *user_data) {
 	gui_key_t key = (gui_key_t)(uintptr_t)user_data;

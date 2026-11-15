@@ -8,6 +8,7 @@
 #include "src/system/ebook/ebook.h"
 #include "src/system/ebook/ebookhistory.h"
 #include "src/system/ebook/ebookprogress.h"
+#include "src/system/input/readingkeys.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookbar.h"
 #include "src/gui/ebook/ebookfonts.h"
@@ -2040,8 +2041,9 @@ bool ebookreader_key(gui_key_t key) {
 		int32_t step = lv_obj_get_height(page_box) * 9 / 10;
 		uint32_t chapter = ebook_chapter_index(book);
 		if (key == GUI_KEY_NEXT) {
-			if (lv_obj_get_scroll_bottom(page_box) <= 1 && chapter + 1u < ebook_spine_count(book)) {
-				load_chapter(chapter + 1u, 0, 0);
+			if (lv_obj_get_scroll_bottom(page_box) <= 1) {
+				if (chapter + 1u < ebook_spine_count(book)) load_chapter(chapter + 1u, 0, 0);
+				else finish_book();
 			} else {
 				lv_obj_scroll_to_y(page_box, y + step, LV_ANIM_OFF);
 			}
@@ -2667,12 +2669,14 @@ static void build_menu(gui_config_t *cfg) {
 // down.
 static void reader_loaded_cb(lv_event_t *e) {
 	(void)e;
+	readingkeys_enter(readingkeys_mode());
 	topbar_set_hidden(true);
 	back_btn_force_hidden(true);
 }
 
 static void reader_unloaded_cb(lv_event_t *e) {
 	(void)e;
+	readingkeys_leave();
 	back_btn_force_hidden(false);
 	topbar_set_hidden(false);
 

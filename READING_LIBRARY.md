@@ -1,4 +1,4 @@
-# Reading library — items 1–3
+# Reading library — items 1–4
 
 Source work on `reading-overhaul`; no firmware update has been built or
 published for this feature. Keep the tested `main` firmware until the complete
@@ -72,6 +72,43 @@ No clock, per-book timestamps, background polling, or extra page-turn writes
 are needed. Config is read only on the UI thread; the worker gets an immutable
 history snapshot and parses metadata only for remembered files.
 
+## Reading buttons — item 4
+
+Open the Books gear button to reach **Reading settings**, then choose a
+**Volume button action**:
+
+| Choice | Volume up | Volume down |
+| --- | --- | --- |
+| Volume (default) | Usual configured action | Usual configured action |
+| Up: Back | Previous page | Next page |
+| Up: Next | Next page | Previous page |
+
+While a book is open, the case's **Next** and **Previous** buttons turn pages,
+and **Play/Pause** opens or closes the reading menu. The R1 has no separate
+Previous button; **Up: Back** provides one through volume up. These reading
+bindings take priority over the case's music remapping and double-click setup.
+They apply to subsequent presses only while reading; music settings are retained
+for use after closing the reader.
+
+A held reading key produces exactly one action on release. It does not repeatedly
+flip pages or seek background music. In scrolling mode, page buttons move about
+90% of a screen and cross chapter boundaries. Next at the end of the final
+chapter marks the book Finished, as it does after the final paginated page.
+Page actions are consumed while the reader menu or a page animation is visible.
+
+Power and enabled power/volume combinations keep their existing behavior.
+A screenshot or lock combination consumes the volume gesture without also
+turning a page. Existing screen/key-lock rules still apply. Headphone and
+Bluetooth volume controls retain their normal volume behavior.
+
+Reading commands carry their reader session through the input queue. A release
+or queued action from a closed book is discarded, including when another book
+has since opened; it never becomes a music command. Pending case-button music
+holds/double-clicks spanning a reader context change are cancelled. Input threads
+read atomic context snapshots and post actions through the existing GUI bridge;
+all widget access remains on the UI thread. The setting uses one ebook-config
+key (volume_pages), read on the UI thread and preserved across restarts.
+
 ## Resource limits
 
 The R1 has 64 MB RAM. Scans run on one background worker, cancel between files,
@@ -91,6 +128,18 @@ leave its lookahead area, and can be requested again on return.
 ## Validation
 
 Local checks completed:
+
+- Reading-button tests: default case bindings; both volume-page directions;
+  settings persistence/defaults; one action after arbitrarily repeated holds;
+  duplicate releases; power-combination suppression; simultaneous keys/nodes;
+  headset exclusion; queued actions after closing/reopening; mode changes while
+  held; missing-release recovery; and preservation of reading settings/positions.
+  Native Windows config retries use the same test-only rename accommodation
+  described below.
+- The full device input file, GUI bridge, reader, reading settings and routing
+  module compiled individually with Linux headers, LVGL 9.6 and the pinned
+  ALSA 1.0.26 headers; warnings were treated as errors. These are component
+  checks, not a linked player or firmware build.
 
 - Existing reading-history regression tests also passed locally with Windows
   filesystem adapters (including paths longer than the config value limit).
@@ -128,7 +177,8 @@ update, release or version change was made for these items.
 
 The POSIX symlink cases are included in the scanner tests for the future Linux
 checks. They were not executed by the native Windows test run. On-device
-layout, touch behavior, card-removal behavior, and memory use still need
+layout, touch behavior, card-removal behavior, physical key timing, power/key-lock
+combinations, audio during reading, and memory use still need
 validation with the combined firmware. No Actions run was dispatched or polled.
 
 Run the scanner tests from `sonix-player` on Linux:
@@ -165,6 +215,17 @@ gcc -std=c11 -Wall -Wextra -Werror -I. \
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 ./build_tests/test_ebookrecents "$fixture"
+~~~
+
+Run button tests from sonix-player on Linux:
+
+~~~sh
+gcc -std=c11 -Wall -Wextra -Werror -I. \
+  tests/test_readingkeys.c src/system/input/readingkeys.c \
+  src/system/core/config.c -o build_tests/test_readingkeys
+fixture=$(mktemp -d)
+trap 'rm -rf -- "$fixture"' EXIT
+./build_tests/test_readingkeys "$fixture"
 ~~~
 
 The existing checks workflow will run these tests when it is eventually invoked

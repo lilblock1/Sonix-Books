@@ -70,6 +70,20 @@ static bool generation_in(const char *root, const char *name, char generation[SD
 	}
 	return ok;
 }
+bool sdpackages_game_id(const char *id) {
+	if (!id || !id[0] || strlen(id) >= SD_GAME_ID_MAX || id[0] == '-' || id[strlen(id)-1] == '-') return false;
+	for (const char *p = id; *p; ++p)
+		if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-')) return false;
+	return true;
+}
+
+bool sdpackages_game_generation(const char *root, const char *id, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]) {
+	char name[SD_GAME_ID_MAX + 8];
+	if (!sdpackages_game_id(id)) return false;
+	snprintf(name, sizeof(name), "game-%s", id);
+	return generation_in(root, name, generation, version);
+}
+
 bool sdpackages_generation(const char *root, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]) {
 	return generation_in(root, "packages", generation, version);
 }

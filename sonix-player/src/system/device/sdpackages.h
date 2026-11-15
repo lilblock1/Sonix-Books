@@ -15,6 +15,8 @@ const char *sdpackages_extra_asset(unsigned category);
 const char *sdpackages_extra_folder(unsigned category);
 const char *sdpackages_extra_base(unsigned category);
 bool sdpackages_extra_generation(const char *root, unsigned category, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]);
+// Version of the active managed component, including the legacy combined pack.
+bool sdpackages_component_version(const char *root, unsigned category, char version[SDPACKAGES_VERSION]);
 typedef bool (*sdpackages_cancel_t)(void *user);
 typedef void (*sdpackages_progress_t)(uint64_t done, uint64_t total, void *user);
 typedef enum { SDPACKAGES_OK, SDPACKAGES_INVALID, SDPACKAGES_CORRUPT,

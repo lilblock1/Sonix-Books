@@ -14,5 +14,6 @@
 
 void fwupdate_show(void);
 void fwupdate_show_extras(void);
+void fwupdate_show_game_store(void);
 
 #endif /* FWUPDATE_H */

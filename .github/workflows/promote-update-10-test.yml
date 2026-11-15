@@ -1,0 +1,113 @@
+name: Promote validated Update 10 to Wi-Fi test
+on:
+  push:
+    branches: [battery-optimization]
+    paths: ['.github/workflows/promote-update-10-test.yml']
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: promote-update-10-test
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN: '43767166671'
+      SOURCE_SHA: c5a7a20956c5b5d185fa8e466ac7200ea1dfeeae
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: c5a7a20956c5b5d185fa8e466ac7200ea1dfeeae
+      - name: Require successful source run and all safety gates
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > source-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100" > source-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/artifacts?per_page=100" > source-artifacts.json
+          python3 - <<'PY'
+          import json, os
+          run = json.load(open('source-run.json'))
+          assert run['id'] == int(os.environ['SOURCE_RUN'])
+          assert run['head_sha'] == os.environ['SOURCE_SHA']
+          assert run['head_branch'] == 'battery-optimization'
+          assert run['path'].split('@')[0] == '.github/workflows/r1-target.yml'
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          jobs = {j['name']: j['conclusion'] for j in json.load(open('source-jobs.json'))['jobs']}
+          required = ['checks / dictionary-pack', 'checks / r1-base', 'checks / host',
+                      'checks / format-and-package-tests', 'target', 'native-readers / native-host',
+                      'native-readers / native-r1', 'sd-packages']
+          assert all(jobs.get(name) == 'success' for name in required), jobs
+          expected = {'sonix-books-r1-candidate': 14182174707,
+                      'sonix-books-sd-packages': 14182684438,
+                      'native-reader-r1': 14182759072,
+                      'sonix-books-offline-dictionary': 14183245255}
+          artifacts = {a['name']: a for a in json.load(open('source-artifacts.json'))['artifacts']}
+          for name, artifact_id in expected.items():
+              a = artifacts[name]
+              assert a['id'] == artifact_id and not a['expired']
+              assert a['workflow_run']['head_sha'] == os.environ['SOURCE_SHA']
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              out.write('TEST_BUILD=' + str(run['run_number']) + '\n')
+          PY
+      - name: Retrieve only the validated artifacts
+        run: |
+          gh run download "$SOURCE_RUN" -n sonix-books-r1-candidate -D candidate
+          gh run download "$SOURCE_RUN" -n sonix-books-sd-packages -D sd-packages
+          gh run download "$SOURCE_RUN" -n native-reader-r1 -D native-r1
+          gh run download "$SOURCE_RUN" -n sonix-books-offline-dictionary -D dictionary-pack
+      - name: Reverify firmware and SD payload before publication
+        run: |
+          python3 sonix-player/tools/verify_test_release.py candidate --build "$TEST_BUILD" --output test-release.json
+          (cd candidate && sha256sum -c SHA256SUMS)
+          (cd sd-packages && sha256sum -c Sonix-Books-SD-Packages.spk.sha256)
+          (cd native-r1 && sha256sum -c Sonix-Books-Native-Readers-r1.zip.sha256)
+          (cd dictionary-pack && sha256sum -c Sonix-Books-Dictionary.zip.sha256)
+          (cd extras/reading-fonts && sha256sum -c Sonix-Books-Fonts.zip.sha256)
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          release = json.load(open('test-release.json'))
+          report = json.load(open('candidate/r1-build-report.json'))
+          assert report['dynamic_loader_matches_base'] is True
+          assert report['final_container_inventory_verified'] is True
+          assert report['removed_system_files'] == []
+          assert report['sd_packages_embedded'] is False
+          sd = json.load(open('sd-packages/sd-packages-report.json'))
+          pack = Path('sd-packages/Sonix-Books-SD-Packages.spk')
+          assert sd['version'] == release['tag']
+          assert sd['bytes'] == pack.stat().st_size
+          assert sd['sha256'] == hashlib.sha256(pack.read_bytes()).hexdigest()
+          PY
+      - name: Upload draft and publish only as opt-in test prerelease
+        run: |
+          tag=$(python3 -c "import json; print(json.load(open('test-release.json'))['tag'])")
+          cat > test-notes.md <<'NOTES'
+          Update 10 — battery optimizations, power profiles, diagnostics and common book formats.
+          HiBy R1 only. Exact validated build from Actions run 43767166671.
+          Automated host, native MIPS, ABI, loader, rootfs size, full container and SD installer checks passed.
+          NOT hardware tested or flash approved. Flashing can still fail; the standard updater may rewrite the identical kernel.
+          Keep a known working installer and recovery path, charge above 50%, and preserve your SD backups.
+          On a channel-enabled build: Settings > System > Update firmware > Via internet > Test.
+          No stable release and no automatic installation. ADB defaults on for fresh installs.
+          Large reader engines/fonts/dictionaries are in the separate SD package.
+          After upgrading an older updater, check again after reboot to install the matching SD package.
+          NOTES
+          files=(candidate/r1.upt candidate/SHA256SUMS candidate/r1-build-report.json
+            sd-packages/Sonix-Books-SD-Packages.spk sd-packages/Sonix-Books-SD-Packages.spk.sha256 sd-packages/sd-packages-report.json
+            native-r1/Sonix-Books-Native-Readers-r1.zip native-r1/Sonix-Books-Native-Readers-r1.zip.sha256
+            extras/reading-fonts/Sonix-Books-Fonts.zip extras/reading-fonts/Sonix-Books-Fonts.zip.sha256
+            dictionary-pack/Sonix-Books-Dictionary.zip dictionary-pack/Sonix-Books-Dictionary.zip.sha256)
+          gh release create "$tag" "${files[@]}" --target "$SOURCE_SHA" --draft --prerelease --latest=false --title "Sonix Books $tag (Update 10 R1 test)" --notes-file test-notes.md
+          gh release view "$tag" --json assets,isDraft,isPrerelease,tagName > draft.json
+          python3 - "${files[@]}" <<'PY'
+          import json, sys
+          from pathlib import Path
+          draft = json.load(open('draft.json'))
+          assert draft['isDraft'] and draft['isPrerelease']
+          expected = {Path(p).name: Path(p).stat().st_size for p in sys.argv[1:]}
+          assert {a['name']: a['size'] for a in draft['assets']} == expected
+          PY
+          gh release edit "$tag" --draft=false --prerelease --latest=false
+          echo "Published opt-in test: $tag" >> "$GITHUB_STEP_SUMMARY"

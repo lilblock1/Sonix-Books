@@ -777,6 +777,13 @@ static void park_radios_if_idle(uint32_t now) {
 			g_wifi_parked = false;
 			g_wifi_idle_since = now;
 		}
+		if (g_reader_wifi_parked && (!reader_idle || wifi_wanted())) {
+			g_reader_wifi_parked = false;
+			g_wifi_parked = false;
+			g_wifi_idle_since = now;
+			if (config_get_int("wireless", "wifi", 0)) wifi_set_enabled_transient(true);
+			return;
+		}
 		if (reader_idle && !g_wifi_parked && wifi_get_enabled() &&
 			since(g_wifi_idle_since, now) >= g_radio_park_after_ms) {
 			g_reader_wifi_parked = true;

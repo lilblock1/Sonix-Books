@@ -40,7 +40,7 @@ void gbinput_set_glass(int width, int height) {
 #include "src/system/core/panel.h"
 #include "src/system/device/power.h"
 
-#define MAX_ZONES 16
+#define MAX_ZONES 24
 
 // How long to wait for a packet before rechecking whether it is time to stop.
 // 100 ms reads as instant to a human finger, and the thread sleeps the rest of

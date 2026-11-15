@@ -2,6 +2,7 @@
 #define OTA_H
 
 #include <stdbool.h>
+#include "game_store.h"
 
 // Firmware update over the network: the newest stable release on the
 // project's GitHub page that carries this model's .upt, downloaded to the card
@@ -60,6 +61,11 @@ typedef struct {
 // Starts looking for a release. False when a check or a download is already
 // running.
 bool ota_check_start(void);
+// Game Store operations share the single OTA worker lock; never flash.
+bool ota_store_check_start(void);
+bool ota_store_download_start(unsigned index);
+size_t ota_store_count(void);
+const game_store_item_t *ota_store_item(unsigned index);
 // Downloads and installs only selected extras for the installed firmware. No .upt.
 bool ota_extras_start(unsigned mask);
 // GUI thread: only components without a current managed version.

@@ -1,0 +1,138 @@
+name: Promote hardware-confirmed Update 10 to stable
+on:
+  push:
+    branches: [stable-update-10]
+    paths: ['.github/workflows/promote-update-10-stable.yml']
+permissions:
+  contents: write
+concurrency:
+  group: promote-update-10-stable
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TEST_TAG: v0.3.0.13-test
+      STABLE_TAG: v0.3.0.13
+      SOURCE_SHA: c5a7a20956c5b5d185fa8e466ac7200ea1dfeeae
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: c5a7a20956c5b5d185fa8e466ac7200ea1dfeeae
+      - name: Download and pin the exact tested prerelease assets
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TEST_TAG" > source-release.json
+          gh release download "$TEST_TAG" -D verified
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          r = json.load(open('source-release.json'))
+          assert r['id'] == 446410074 and r['tag_name'] == os.environ['TEST_TAG']
+          assert r['target_commitish'] == os.environ['SOURCE_SHA'] and r['prerelease'] and not r['draft']
+          pinned = {
+              'r1-build-report.json': '38acfba0aa0a998abfa50fabdac7a9775b3f56f54f466c630b81fd077cd77c47',
+              'r1.upt': 'b2d96afe0fd79cf884fea959046c66ba30a5da0671587c8e6fd7db4decb75d7a',
+              'sd-packages-report.json': 'a05001fd49f477aad1625dbc544c391fa6d219de76bcd268482fd13da5117cd6',
+              'SHA256SUMS': '980d37c3b89947c1af2567ae91ef2feccc0de7a86e5f43ab6dbd9d4d2ee7a562',
+              'Sonix-Books-Dictionary.zip': '241d45cec32e754e184baa588036184c72f63d0383fb9db317edc388bf4d9755',
+              'Sonix-Books-Dictionary.zip.sha256': 'bef7589aa0feff2e45049ae6cab1af694ef525bc3f7363fb0d5fb76169acd48b',
+              'Sonix-Books-Fonts.zip': '582f230c9339d48d76392c27fc4fd703eb96b1adb69f6b803489f8dc27921f05',
+              'Sonix-Books-Fonts.zip.sha256': 'be7d2710976e8101ab2d7667f98ee4cc124c6eac6fcb5f867bd5eae7e4e13161',
+              'Sonix-Books-Native-Readers-r1.zip': '5c810e637d5dd2ff32fdc1842467fcb67374f300b826f6e0d87825a4f0e4ca8d',
+              'Sonix-Books-Native-Readers-r1.zip.sha256': 'f42ee7500f5e201a40395dcbb5b4c944b73f5df1df135727949fccc30b0685a7',
+              'Sonix-Books-SD-Packages.spk': '17740343981d792295de24927f925181ef77527c135acc0c79b1e38b04c25af7',
+              'Sonix-Books-SD-Packages.spk.sha256': 'b6fa296263e7da0dc7be17eebfcb62c2c612d7c249590fb7c1c6fb83ff0e9c4a',
+          }
+          assert {a['name'] for a in r['assets']} == set(pinned)
+          for a in r['assets']:
+              p = Path('verified') / a['name']
+              assert a['state'] == 'uploaded'
+              assert a['digest'] == 'sha256:' + pinned[a['name']]
+              assert p.stat().st_size == a['size']
+              with p.open('rb') as f:
+                  assert hashlib.file_digest(f, 'sha256').hexdigest() == pinned[a['name']]
+          PY
+          (cd verified && sha256sum -c SHA256SUMS && sha256sum -c *.sha256)
+          python3 sonix-player/tools/verify_test_release.py verified --build 13 --output test-verified.json
+      - name: Preserve firmware bytes and change only the SD manifest release tag
+        run: |
+          cp -a verified stable
+          python3 - <<'PY'
+          import hashlib, json, os, struct
+          from pathlib import Path
+          f = Path('stable/Sonix-Books-SD-Packages.spk')
+          original = f.read_bytes()
+          assert original[:8] == b'SONIXPK1'
+          n = struct.unpack('<I', original[8:12])[0]
+          assert 0 < n <= 512*1024 and 12+n < len(original)
+          manifest = json.loads(original[12:12+n])
+          assert manifest['schema'] == 1 and manifest['target'] == 'r1'
+          assert manifest['version'] == os.environ['TEST_TAG']
+          payload = original[12+n:]
+          assert sum(x['compressed'] for x in manifest['files']) == len(payload)
+          assert sum(x['bytes'] for x in manifest['files']) == manifest['unpacked_bytes']
+          manifest['version'] = os.environ['STABLE_TAG']
+          encoded = json.dumps(manifest, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
+          new = original[:8] + struct.pack('<I', len(encoded)) + encoded + payload
+          assert new[12+len(encoded):] == payload
+          f.write_bytes(new)
+          sha = hashlib.sha256(new).hexdigest()
+          f.with_name(f.name+'.sha256').write_text(sha+'  '+f.name+'\n')
+          report_path=Path('stable/sd-packages-report.json')
+          report=json.loads(report_path.read_text())
+          assert report['version'] == os.environ['TEST_TAG']
+          assert report['sha256'] == hashlib.sha256(original).hexdigest()
+          report.update(version=os.environ['STABLE_TAG'], bytes=len(new), sha256=sha)
+          report_path.write_text(json.dumps(report, indent=2)+'\n')
+          assert Path('stable/r1.upt').read_bytes() == Path('verified/r1.upt').read_bytes()
+          PY
+          (cd stable && sha256sum -c SHA256SUMS && sha256sum -c *.sha256)
+      - name: Run the real SD installer against the stable package
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. tests/sdpackages_driver.c \
+            src/system/device/sdpackages.c src/system/device/sdpackages_paths.c \
+            src/system/core/json.c src/system/core/sha256.c -o sd-install-check
+          python3 - <<'PY'
+          import json, subprocess, tempfile
+          from pathlib import Path
+          report=json.loads(Path('../stable/sd-packages-report.json').read_text())
+          with tempfile.TemporaryDirectory() as card:
+              result=subprocess.check_output(['./sd-install-check',card,'../stable/Sonix-Books-SD-Packages.spk',report['version'],report['sha256'],'0'],text=True).strip()
+              assert result == '0 '+report['version'], result
+          PY
+      - name: Publish official stable release only after verification
+        run: |
+          cat > stable-notes.md <<'NOTES'
+          # Sonix Books Update 10 — official stable release
+          
+          HiBy R1 only. The maintainer confirmed v0.3.0.13-test working on a physical R1 on November 15, 2026.
+          This stable release uses the identical tested r1.upt (no rebuild or changes to firmware bytes).
+          Automated checks passed in Actions run 43767166671. Hardware confirmation is a maintainer report, not a comprehensive independent hardware certification; the historical build report is unchanged.
+          
+          Highlights:
+          - Reading improvements, extra fonts (including dyslexia-friendly options), offline dictionary and common document formats.
+          - Battery improvements, selectable power profiles and battery/CPU diagnostics.
+          - Reduced background activity, adaptive display rendering and safer idle audio/Wi-Fi behavior.
+          - Large document engines, dictionaries and fonts remain in SD-card packages.
+          - ADB defaults on for fresh installations; kernel, bootloader and recovery are unchanged.
+          
+          Stable Wi-Fi channel: Settings > System > Update firmware > Via internet > Stable.
+          Already using v0.3.0.13-test? The firmware is identical; no firmware reflash is needed. A package-only update may be offered to synchronize the stable SD tag.
+          For upgrades, use a writable microSD card, charge above 50%, keep power stable, and retain a known working recovery installer. Firmware flashing still carries risk.
+          Downloadable Extras selection is not included; it remains in development.
+          NOTES
+          gh release create "$STABLE_TAG" stable/* --target "$SOURCE_SHA" --draft --latest=false --title "Sonix Books v0.3.0.13 (Update 10 — Stable)" --notes-file stable-notes.md
+          gh release view "$STABLE_TAG" --json assets,isDraft,isPrerelease,tagName > draft.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          draft=json.load(open('draft.json'))
+          assert draft['tagName'] == os.environ['STABLE_TAG']
+          assert draft['isDraft'] and not draft['isPrerelease']
+          assert {a['name']:a['size'] for a in draft['assets']} == {p.name:p.stat().st_size for p in Path('stable').iterdir()}
+          PY
+          gh release edit "$STABLE_TAG" --draft=false --prerelease=false --latest
+          echo "Published official stable: $STABLE_TAG" >> "$GITHUB_STEP_SUMMARY"

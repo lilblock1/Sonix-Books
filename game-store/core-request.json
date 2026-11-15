@@ -1,0 +1,8 @@
+{
+  "id": "2048",
+  "version": "v1.0.0",
+  "channel": "device-test",
+  "runtime_abi": 1,
+  "hardware_verified": false,
+  "firmware_test": "v0.3.0.49-test"
+}

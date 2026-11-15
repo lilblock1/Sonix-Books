@@ -30,6 +30,18 @@ int main(void) {
 		"\"label\":\"sonix-ui1|game|New Title|A simple puzzle.\"}]}",items,8,&count));
 	assert(count==1&&items[0].kind==GAME_STORE_GAME&&!strcmp(items[0].title,"New Title"));
 	assert(!strcmp(items[0].description,"A simple puzzle."));
+	assert(game_store_parse("{\"tag_name\":\"" GAME_STORE_TAG "\",\"draft\":false,\"assets\":["
+		ASSET("sonix-game-v1-2048-v1.1.0.spk",URL "sonix-game-v1-2048-v1.1.0.spk") ","
+		"{\"name\":\"sonix-logo-v1-2048-v1.1.0.rgb565\",\"size\":4608,\"state\":\"uploaded\","
+		"\"browser_download_url\":\"https://example.com/wrong.rgb565\",\"digest\":\"" DIGEST "\"},"
+		"{\"name\":\"sonix-logo-v1-2048-v1.0.0.rgb565\",\"size\":4608,\"state\":\"uploaded\","
+		"\"browser_download_url\":\"" URL "sonix-logo-v1-2048-v1.0.0.rgb565\",\"digest\":\"" DIGEST "\"},"
+		"{\"name\":\"sonix-logo-v1-2048-v1.1.0.rgb565\",\"size\":4607,\"state\":\"uploaded\","
+		"\"browser_download_url\":\"" URL "sonix-logo-v1-2048-v1.1.0.rgb565\",\"digest\":\"" DIGEST "\"},"
+		"{\"name\":\"sonix-logo-v1-2048-v1.1.0.rgb565\",\"size\":4608,\"state\":\"uploaded\","
+		"\"browser_download_url\":\"" URL "sonix-logo-v1-2048-v1.1.0.rgb565\",\"digest\":\"" DIGEST "\"}]}",items,8,&count));
+	assert(count==1&&!strcmp(items[0].logo_url,URL "sonix-logo-v1-2048-v1.1.0.rgb565"));
+	assert(!strcmp(items[0].logo_sha256,DIGEST+7));
 	assert(!game_store_parse("{\"tag_name\":\"v0.3.0.13\",\"draft\":false,\"assets\":[]}",items,8,&count));
 	assert(!game_store_parse("{\"tag_name\":\"" GAME_STORE_TAG "\",\"draft\":true,\"assets\":[]}",items,8,&count));
 	assert(game_store_version_cmp("v1.10.0","v1.2.0")>0);

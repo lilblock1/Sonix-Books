@@ -1210,6 +1210,9 @@ static void lay_out(lv_obj_t *box, uint32_t block, uint32_t offset, uint32_t *en
 // How long one tick of the count may take. A page is often more than this on
 // the device, so in practice one page per tick, and a tap waits at most one.
 #define COUNT_SLICE_MS 8
+// Leave time for CPU idle between background slices; visible page turns
+// and backward navigation retain their existing synchronous layout path.
+#define COUNT_PERIOD_MS 40
 
 static lv_obj_t *count_box;
 static lv_timer_t *count_timer;
@@ -1306,9 +1309,12 @@ static void walk_fill_trail(void) {
 static void anchor_pages_before(int pages_in_chapter);
 
 static void count_timer_cb(lv_timer_t *timer) {
-	(void)timer;
 	// Not while a page slides: the tick would take its frames.
-	if (!book || turning) {
+	if (!book || !walk_wanted) {
+		lv_timer_pause(timer);
+		return;
+	}
+	if (turning || !power_screen_is_on()) {
 		return;
 	}
 	uint32_t started = lv_tick_get();
@@ -3120,8 +3126,9 @@ void ebookreader_init(gui_config_t *cfg) {
 	lv_obj_set_scrollable(count_box, false);
 	lv_obj_set_clickable(count_box, false);
 	lv_obj_set_flex_flow(count_box, LV_FLEX_FLOW_COLUMN);
-	count_timer = lv_timer_create(count_timer_cb, 1, NULL);
+	count_timer = lv_timer_create(count_timer_cb, COUNT_PERIOD_MS, NULL);
 	lv_timer_pause(count_timer);
+	power_pause_in_standby(count_timer);
 
 	ebookbar_create(&status_bar, ebookreader_screen, cfg->screen_width);
 	lv_obj_align(status_bar.root, LV_ALIGN_BOTTOM_MID, 0, -6);

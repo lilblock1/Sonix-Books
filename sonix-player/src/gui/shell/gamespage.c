@@ -9,6 +9,7 @@
 #include "src/gui/shell/topbar.h"
 #include "src/system/device/nativegame.h"
 #include "src/system/device/game_store.h"
+#include "src/gui/shell/gamelogo.h"
 #include "src/system/gearboy/gbinput.h"
 #include <stdatomic.h>
 #include "src/system/device/sdpackages.h"
@@ -215,12 +216,31 @@ static void show_roms(lv_event_t *e) {
 	info(rom_list,message);
 	switch_screen(rom_screen);
 }
+static void game_tile(const char *id,const char *title,const char *subtitle,game_store_kind_t kind,lv_event_cb_t cb,void *arg) {
+	lv_obj_t *row=lv_btn_create(games_list);
+	lv_obj_set_width(row,lv_pct(100));lv_obj_set_height(row,100);
+	lv_obj_add_style(row,&theme_style_card,0);lv_obj_add_style(row,&theme_style_card_pressed,LV_STATE_PRESSED);
+	lv_obj_set_scrollable(row,false);lv_obj_set_style_pad_all(row,10,0);
+	lv_obj_set_style_pad_column(row,12,0);lv_obj_set_flex_flow(row,LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(row,LV_FLEX_ALIGN_START,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
+	gamelogo_create(row,id,title,kind,NULL);
+	lv_obj_t *column=lv_obj_create(row);
+	lv_obj_set_height(column,LV_SIZE_CONTENT);lv_obj_set_flex_grow(column,1);
+	lv_obj_set_style_bg_opa(column,0,0);lv_obj_set_style_border_width(column,0,0);
+	lv_obj_set_style_pad_all(column,0,0);lv_obj_set_style_pad_row(column,4,0);
+	lv_obj_set_scrollable(column,false);lv_obj_set_clickable(column,false);
+	lv_obj_set_flex_flow(column,LV_FLEX_FLOW_COLUMN);
+	lv_obj_t *name=lv_label_create(column);lv_label_set_text(name,title);
+	lv_obj_set_width(name,lv_pct(100));lv_label_set_long_mode(name,LV_LABEL_LONG_DOT);
+	lv_obj_add_style(name,&theme_style_text,0);lv_obj_set_style_text_font(name,&font_ui_24_bold,0);
+	info(column,subtitle);lv_obj_add_event_cb(row,cb,LV_EVENT_CLICKED,arg);
+}
 static void refresh_library(lv_event_t *e) {
 	(void)e;lv_obj_clean(games_list);game_count=0;
 #if GB_CORE
-	settingsrow_action(games_list,"Game Boy / Game Boy Color (Gearboy)",gearboy_clicked,NULL);
+	game_tile("gearboy","Gearboy","Game Boy / Game Boy Color",GAME_STORE_EMULATOR,gearboy_clicked,NULL);
 #endif
-	settingsrow_action(games_list,"flappy_bird",flappy_clicked,NULL);
+	game_tile("flappy-bird","Flappy Bird","Built-in game",GAME_STORE_GAME,flappy_clicked,NULL);
 	if(!gui_card_available()){info(games_list,"Insert microSD for downloaded games.");return;}
 	const char *root=storage_sd_root();char path[1024];
 	int n=snprintf(path,sizeof(path),"%s/.sonix",root);
@@ -235,8 +255,8 @@ static void refresh_library(lv_event_t *e) {
 				!sdpackages_game_generation(root,id,generation,version))continue;
 			snprintf(games[game_count],sizeof(games[0]),"%s",id);
 			const game_store_profile_t *profile=game_store_profile(id);
-			snprintf(label,sizeof(label),"%s  %s",profile?profile->title:id,version);
-			settingsrow_action(games_list,label,show_roms,(void*)(uintptr_t)game_count);++game_count;
+			snprintf(label,sizeof(label),"%s  |  %s",profile&&profile->kind==GAME_STORE_EMULATOR?"Emulator":"Installed",version);
+			game_tile(id,profile?profile->title:id,label,profile?profile->kind:GAME_STORE_OTHER,show_roms,(void*)(uintptr_t)game_count);++game_count;
 		}
 		closedir(dir);
 	}

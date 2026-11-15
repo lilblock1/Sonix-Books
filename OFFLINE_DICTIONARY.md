@@ -103,6 +103,10 @@ links/special files, missing/card-removed roots, catalog limits and cancellation
 The separate English pack job verifies the pinned archive and every generated
 record. The full host application compile/startup check covers integration.
 
+These checks passed in [run 43752549453](https://github.com/lilblock1/Sonix-Books/actions/runs/43752549453),
+including the full host link/startup and existing reading/font/update regressions.
+The verified English pack contains 151,366 headword/irregular-form entries.
+
 R1 touch layout, long-entry scrolling, card removal during physical I/O,
 keyboard/page-key timing, audio during lookup and memory use still need
 on-device validation in a later combined firmware build.

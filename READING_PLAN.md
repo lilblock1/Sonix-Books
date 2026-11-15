@@ -17,7 +17,7 @@ Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 5. [x] Search inside books and jump to a result (source and local checks; device validation pending).
 6. [x] SD-card font selection with preview and seven-family font pack (source and local checks; device validation pending).
 7. [x] Named bookmarks and notes (source and automated checks; device validation pending).
-8. [x] Offline dictionary lookup from the reader (source implemented; automated/device validation pending).
+8. [x] Offline dictionary lookup from the reader (source and automated checks; device validation pending).
 9. [ ] TXT books with reading controls, bookmarks and resume.
 
 Implementation constraints: 64 MB device RAM; bounded background work; keep

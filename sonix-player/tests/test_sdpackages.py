@@ -105,6 +105,7 @@ def main():
         def game_build(id, version, data):
             with zipfile.ZipFile(game_zip, 'w') as archive:
                 archive.writestr('Games/' + id + '/asset.txt', data)
+                archive.writestr('Games/' + id + '/core.so', b'test-core:' + data)
             bundle.build(version, [game_zip], game_pack, require_r1=False, game=id)
         def game_install(id, version, cancel=0):
             sha = hashlib.sha256(game_pack.read_bytes()).hexdigest()
@@ -118,6 +119,8 @@ def main():
         assert game_install('2048', 'v1.0.0') == (0, 'v1.0.0')
         game_base = card / '.sonix/game-2048'
         game_before = (game_base / 'active').read_bytes()
+        core_dir = game_base / game_before.decode().strip() / 'Games/2048'
+        assert (core_dir / '.core-sha256').read_text().strip() == hashlib.sha256(b'test-core:first').hexdigest()
         assert game_install('nes', 'v1.0.0')[0] != 0
         assert game_install('../outside', 'v1.0.0')[0] != 0
         game_build('2048', 'v1.1.0', b'new' * 30000)

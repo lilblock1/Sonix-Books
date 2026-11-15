@@ -2974,8 +2974,14 @@ static void *bluetooth_worker(void *arg) {
 				wait_ms = 500;
 			}
 			struct timespec deadline;
-			deadline_in_ms(&deadline, wait_ms);
-			pthread_cond_timedwait(&wake, &lock, &deadline);
+			if (!g_enabled && a2dp_missing_since == 0) {
+				// The radio is off: only a posted command or stack signal can
+				// give this worker anything useful to do.
+				pthread_cond_wait(&wake, &lock);
+			} else {
+				deadline_in_ms(&deadline, wait_ms);
+				pthread_cond_timedwait(&wake, &lock, &deadline);
+			}
 			have_job = take_job(&job);
 		}
 		bool enabled = g_enabled;

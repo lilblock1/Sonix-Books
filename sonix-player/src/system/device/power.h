@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "power_profile.h"
 
 #include "lvgl/lvgl.h"
 
@@ -115,6 +116,16 @@ void power_keep_animations_paused(void);
 bool power_update_display_policy(void);
 void power_set_display_options(bool adaptive, bool reading_dim, bool instant_turns);
 bool power_instant_reading_turns(void);
+void power_set_profile(power_profile_t selected, bool auto_saver);
+power_profile_t power_get_effective_profile(void);
+typedef struct {
+    int percent, millivolts;
+    bool charging, plugged, wifi_on, bluetooth_on, parked;
+    unsigned screen_on_seconds, drain_tenths_per_hour, estimated_minutes;
+    bool drain_known;
+} power_diagnostics_t;
+// GUI thread only: snapshot with no new background worker or disk writes.
+void power_get_diagnostics(power_diagnostics_t *out);
 
 // --- Activity notifications (thread-safe; call from any thread) ---
 // Reset the idle timers because the user did something (e.g. a physical

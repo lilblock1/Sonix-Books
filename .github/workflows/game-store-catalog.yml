@@ -1,0 +1,29 @@
+name: Initialize Sonix Game Store catalog (no firmware build)
+on:
+  push:
+    branches: [game-store-content]
+    paths: ['.github/workflows/game-store-catalog.yml']
+permissions:
+  contents: write
+concurrency:
+  group: sonix-game-store
+  cancel-in-progress: false
+jobs:
+  catalog:
+    if: github.repository == 'lilblock1/Sonix-Books'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Create separate non-firmware catalog if absent
+        run: |
+          tag=sonix-game-store-v1
+          if gh release view "$tag" --json tagName,isDraft,isPrerelease > catalog.json 2>/dev/null; then
+            python3 -c "import json; c=json.load(open('catalog.json')); assert c['tagName']=='sonix-game-store-v1' and not c['isDraft'] and c['isPrerelease']"
+            exit 0
+          fi
+          gh release create "$tag" --target "$SOURCE_SHA" --prerelease --latest=false \
+            --title "Sonix Game Store — package catalog v1" \
+            --notes "Independent SD-card game and emulator catalog for Sonix Books on HiBy R1. Not a firmware image. Only individually validated game packages will be uploaded here. The stable and test firmware channels are separate."

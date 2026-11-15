@@ -366,6 +366,14 @@ bool sonixlink_get_enabled(void) {
 void sonixlink_set_enabled(bool on) {
 	pthread_mutex_lock(&lock);
 	enabled = on;
+	if (!on) {
+		// Links still in the handoff queue are owned here, not by the
+		// client loop. Don't leave them open while the service sleeps.
+		for (int i = 0; i < pending_link_count; i++) {
+			close(pending_links[i]);
+		}
+		pending_link_count = 0;
+	}
 	pthread_cond_broadcast(&enabled_changed);
 	pthread_mutex_unlock(&lock);
 	config_set_int("wireless", "sonixlink", on ? 1 : 0);

@@ -149,10 +149,12 @@ void ebookfontlist_scan(const char *sd_root, ebookfontlist_t *out) {
 		if (n < 0 || (size_t)n >= sizeof(file) || !ordinary(file, &st)) { out->skipped++; continue; }
 		if (S_ISDIR(st.st_mode)) {
 			char id[EBOOKFONTLIST_ID], resolved[EBOOKFONTLIST_PATH];
-			n = snprintf(id, sizeof(id), "%s/Regular.ttf", de->d_name);
-			if (n < 0 || (size_t)n >= sizeof(id)) { out->skipped++; continue; }
+			size_t family_len = strlen(de->d_name);
+			if (family_len + sizeof("/Regular.ttf") > sizeof(id)) { out->skipped++; continue; }
+			memcpy(id, de->d_name, family_len);
+			memcpy(id + family_len, "/Regular.ttf", sizeof("/Regular.ttf"));
 			if (!ebookfontlist_resolve(sd_root, id, 0, resolved, sizeof(resolved)))
-				snprintf(id, sizeof(id), "%s/Regular.otf", de->d_name);
+				memcpy(id + family_len, "/Regular.otf", sizeof("/Regular.otf"));
 			add(out, sd_root, id);
 		} else if (extension(de->d_name)) add(out, sd_root, de->d_name);
 	}

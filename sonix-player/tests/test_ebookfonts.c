@@ -50,6 +50,25 @@ int main(int argc,char **argv) {
  ebookfontlist_t list;ebookfontlist_scan(root,&list);
  assert(list.count==3&&!list.unavailable&&!list.truncated&&list.skipped);
  assert(!strcmp(list.entries[0].name,"Alpha")&&!strcmp(list.entries[2].name,"Zed"));
+ /* Include the separator, filename and terminator in the family ID limit. */
+ char family[EBOOKFONTLIST_ID],boundary[256],boundary_id[EBOOKFONTLIST_ID];
+ const size_t max_family=EBOOKFONTLIST_ID-sizeof("/Regular.ttf");
+ for(unsigned otf=0;otf<2;otf++){
+  memset(family,otf?'Y':'X',max_family);family[max_family]=0;
+  snprintf(boundary,sizeof(boundary),"Ebook/Fonts/%s",family);dir(boundary);
+  snprintf(boundary,sizeof(boundary),"Ebook/Fonts/%s/Regular.%s",family,otf?"otf":"ttf");fake(boundary);
+  memcpy(boundary_id,family,max_family);
+  memcpy(boundary_id+max_family,otf?"/Regular.otf":"/Regular.ttf",sizeof("/Regular.ttf"));
+  assert(strlen(boundary_id)==EBOOKFONTLIST_ID-1&&ebookfontlist_valid_id(boundary_id));
+  ebookfontlist_scan(root,&list);assert(list.count==4+(int)otf);
+  int found=0;
+  for(int i=0;i<list.count;i++)if(!strcmp(list.entries[i].id,boundary_id))found=1;
+  assert(found);
+ }
+ memset(family,'W',max_family+1);family[max_family+1]=0;
+ snprintf(boundary,sizeof(boundary),"Ebook/Fonts/%s",family);dir(boundary);
+ snprintf(boundary,sizeof(boundary),"Ebook/Fonts/%s/Regular.otf",family);fake(boundary);
+ ebookfontlist_scan(root,&list);assert(list.count==5&&list.skipped>=2);
  char file[800];assert(ebookfontlist_resolve(root,"Alpha/Regular.ttf",0,file,sizeof(file)));
  assert(ebookfontlist_resolve(root,"Alpha/Regular.ttf",1,file,sizeof(file)));
  assert(!ebookfontlist_resolve(root,"Alpha/Regular.ttf",3,file,sizeof(file)));

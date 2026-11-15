@@ -47,6 +47,20 @@ int main(void) {
 	assert(game_store_version_cmp("v1.10.0","v1.2.0")>0);
 	assert(game_store_version_cmp("v1.0.0","v2.0.0")<0);
 	assert(!sdpackages_game_id("../bad") && !sdpackages_game_id("bad/path") && sdpackages_game_id("gba"));
+	store_ui_t ui;store_ui_default(&ui);assert(ui.layout==STORE_UI_LIST&&ui.logo_size==72);
+	const char *design="{\"schema\":1,\"version\":\"v1.0.0\",\"heading\":\"Sonix Game Store\","
+		"\"subtitle\":\"Discover games and emulators\",\"layout\":\"grid\",\"palette\":\"ocean\","
+		"\"radius\":16,\"padding\":10,\"gap\":8,\"logo_size\":76,\"emulators_first\":false,\"show_descriptions\":true}";
+	assert(store_ui_parse(design,"v1.0.0",&ui)&&ui.layout==STORE_UI_GRID&&ui.palette==STORE_UI_OCEAN&&ui.logo_size==76);
+	assert(!store_ui_parse(design,"v1.0.1",&ui)&&!strcmp(ui.version,"v1.0.0"));
+	assert(!store_ui_parse("{\"schema\":2}","v1.0.0",&ui)&&ui.logo_size==76);
+	assert(!store_ui_parse("{\"schema\":1,\"logo_size\":9999}","v1.0.0",&ui));
+	store_ui_asset_t appearance;
+	assert(store_ui_find_asset("{\"tag_name\":\"" GAME_STORE_TAG "\",\"draft\":false,\"assets\":["
+		ASSET("sonix-store-ui-v1-v1.0.0.json",URL "sonix-store-ui-v1-v1.0.0.json") ","
+		ASSET("sonix-store-ui-v1-v1.1.0.json",URL "sonix-store-ui-v1-v1.1.0.json") ","
+		ASSET("sonix-store-ui-v2-v9.0.0.json",URL "sonix-store-ui-v2-v9.0.0.json") "]}",&appearance));
+	assert(!strcmp(appearance.version,"v1.1.0")&&appearance.size==1234&&!strcmp(appearance.sha256,DIGEST+7));
 	puts("Game Store catalog checks passed");
 	return 0;
 }

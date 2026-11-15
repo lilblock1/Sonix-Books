@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
+#include <errno.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -129,12 +131,48 @@ static bool filename(const char *name) {
 	for(const unsigned char *p=(const unsigned char*)name;*p;++p)if(*p<32||*p=='/'||*p=='\\'||*p==127)return false;
 	return true;
 }
-// Load only a managed core; do not remount noexec cards or write internal flash.
+// A verified package can still be corrupted on a removable SD. Recheck the
+// installed member digest, then use an anonymous-on-close tmpfs copy if the
+// existing mount forbids executable mappings. Never remount or touch flash.
+static bool copy_checked(int input,int output,const char *expected) {
+	sha256_ctx hash;sha256_init(&hash);
+	unsigned char bytes[16384];size_t total=0;
+	for(;;) {
+		ssize_t got=read(input,bytes,sizeof(bytes));
+		if(got<0||stopping())return false;
+		if(!got)break;
+		total+=(size_t)got;if(total>CORE_MAX)return false;
+		sha256_update(&hash,bytes,(size_t)got);
+		if(output>=0)for(ssize_t at=0;at<got;) {
+			ssize_t sent=write(output,bytes+at,(size_t)(got-at));if(sent<=0)return false;at+=sent;
+		}
+	}
+	char digest[65];sha256_final_hex(&hash,digest);
+	return total>0&&!strcmp(digest,expected);
+}
 static void *open_core(const char *path) {
+	char marker[1200],digest[67];
+	int n=snprintf(marker,sizeof(marker),"%s/.core-sha256",core_dir);
+	if(n<=0||(size_t)n>=sizeof(marker)||!regular(marker,65,NULL))return NULL;
+	int hashfd=open(marker,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(hashfd<0)return NULL;
+	ssize_t length=read(hashfd,digest,sizeof(digest));close(hashfd);
+	if(length!=65||digest[64]!='\n')return NULL;
+	digest[64]=0;
 	if(!regular(path,CORE_MAX,NULL))return NULL;
-	void *lib=dlopen(path,RTLD_NOW|RTLD_LOCAL);if(lib)return lib;
-	// No fallback until the target tmpfs/noexec layout is hardware verified.
-	return NULL;
+	int fd=open(path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return NULL;
+	if(!copy_checked(fd,-1,digest)){close(fd);return NULL;}
+	void *lib=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+	if(lib){close(fd);return lib;}
+	struct statfs fs;
+	if(statfs("/tmp",&fs)||fs.f_type!=0x01021994){close(fd);return NULL;}
+	char temp[]="/tmp/sonix-core-XXXXXX";
+	int tmp=mkstemp(temp);
+	if(tmp<0){close(fd);return NULL;}
+	bool ok=!fstatfs(tmp,&fs)&&fs.f_type==0x01021994&&lseek(fd,0,SEEK_SET)==0&&copy_checked(fd,tmp,digest);
+	close(fd);if(close(tmp))ok=false;
+	if(ok)lib=dlopen(temp,RTLD_NOW|RTLD_LOCAL);
+	unlink(temp);
+	return lib;
 }
 static bool get_core(void *lib,core_t *c) {
 #define LOAD(name) do { *(void **)(&c->name)=dlsym(lib,#name);if(!c->name)return false; } while(0)
@@ -189,14 +227,17 @@ static void sram(core_t *c,int saves,const char *name,bool load) {
 }
 static void *run(void *arg) {
 	session_t *s=arg;core_t c={0};void *lib=NULL,*rom_data=NULL;bool init=false,loaded=false;int saves=-1;
-	char card[64],core[1100],rom[1100],state_name[80],save_name[80],digest[65];
+	char card[64],core[1100],rom[1100],state_name[80],save_name[80],digest[65],generation[SDPACKAGES_VERSION],version[SDPACKAGES_VERSION];
 	snprintf(card,sizeof(card),"/proc/self/fd/%d/.",s->card);
-	if(!sdpackages_game_core(card,s->id,core,sizeof(core)))goto done;
+	if(!sdpackages_game_core(card,s->id,core,sizeof(core))||!sdpackages_game_generation(card,s->id,generation,version))goto done;
 	memcpy(core_dir,core,strlen(core)+1);*strrchr(core_dir,'/')=0;
 	saves=saves_open(s->card,s->id);if(saves<0)goto done;
 	snprintf(save_dir,sizeof(save_dir),"/proc/self/fd/%d/.",saves);
 	sha256_ctx hash;sha256_init(&hash);sha256_update(&hash,s->rom,strlen(s->rom));sha256_final_hex(&hash,digest);
-	snprintf(state_name,sizeof(state_name),"%s.state",digest);snprintf(save_name,sizeof(save_name),"%s.sav",digest);
+	snprintf(save_name,sizeof(save_name),"%s.sav",digest);
+	// Save states are engine-version specific; battery saves survive updates.
+	sha256_init(&hash);sha256_update(&hash,s->rom,strlen(s->rom)+1);sha256_update(&hash,version,strlen(version));sha256_final_hex(&hash,digest);
+	snprintf(state_name,sizeof(state_name),"%s.state",digest);
 	lib=open_core(core);if(!lib||!get_core(lib,&c))goto done;
 	format=0;no_game=false;have_audio=false;sound_used=0;
 	c.retro_set_environment(environment);c.retro_set_video_refresh(video);c.retro_set_audio_sample(sample);

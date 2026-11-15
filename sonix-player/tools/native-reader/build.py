@@ -99,6 +99,19 @@ def main():
               "mujs=no", "brotli=no", "extract=no", "archive=yes", "HAVE_X11=no", "HAVE_GLUT=no", "HAVE_CURL=no", "HAVE_LIBCRYPTO=no",
               "USE_SYSTEM_LIBS=no", "HAVE_SYS_LIBARCHIVE=yes", "SYS_LIBARCHIVE_CFLAGS=-I" + str(prefix / "include"),
               "SYS_LIBARCHIVE_LIBS=" + str(prefix / "lib/libarchive.a")]
+    if args.target == "r1":
+        # MuPDF otherwise uses the build host's ld to wrap raw font files.
+        # Compile generated C resources with the target compiler instead.
+        common.append("HAVE_OBJCOPY=no")
+        marker = build / "portable-font-objects-v1"
+        if not marker.exists():
+            for old in (mupdf / "build").glob("sonix-r1-*"):
+                for pattern in ("**/*.cff.o", "**/*.otf.o", "**/*.ttf.o", "**/*.ttc.o", "**/*.zip.o"):
+                    for obj in old.glob(pattern):
+                        obj.unlink()
+                for name in ("libmupdf.a", "source/fitz/noto.o", "source/fitz/hyphen.o"):
+                    (old / name).unlink(missing_ok=True)
+            marker.write_text("C resource objects use the R1 compiler.\n")
     run("make", "generate", "-j" + str(args.jobs), *common, "CC=gcc", "CXX=g++", "AR=ar", "RANLIB=ranlib", cwd=mupdf, env=env)
     extra = flags + " -DFZ_ENABLE_ICC=0 -DFZ_ENABLE_SPOT_RENDERING=0 -DFZ_PLOTTERS_CMYK=0 -DFZ_ENABLE_OCR_OUTPUT=0 -DFZ_ENABLE_ODT_OUTPUT=0"
     run("make", "libs", "-j" + str(args.jobs), *common, "CC=" + cc, "CXX=" + cxx, "AR=" + ar, "RANLIB=" + ranlib,

@@ -32,6 +32,7 @@ bool sdpackages_valid_version(const char *version);
 #define SD_GAME_ID_MAX 32
 bool sdpackages_game_id(const char *id);
 bool sdpackages_game_generation(const char *root, const char *id, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]);
+bool sdpackages_game_core(const char *root, const char *id, char *out, size_t size);
 
 // Worker thread only. Downloaded archives must match the trusted release asset
 // SHA-256. Extract/verify in a fresh managed directory before the active pointer

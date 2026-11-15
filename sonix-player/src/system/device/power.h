@@ -110,6 +110,12 @@ void power_set_offline_reading(bool active);
 // back to sleep; power_screen_on() catches every animation up on the way back.
 void power_keep_animations_paused(void);
 
+// UI-thread display policy. Returns true when a faster frame is due now.
+// The input timers and physical LCD mode are deliberately unchanged.
+bool power_update_display_policy(void);
+void power_set_display_options(bool adaptive, bool reading_dim, bool instant_turns);
+bool power_instant_reading_turns(void);
+
 // --- Activity notifications (thread-safe; call from any thread) ---
 // Reset the idle timers because the user did something (e.g. a physical
 // button press). Touch input is already accounted for automatically.

@@ -11,6 +11,8 @@
 #include "src/system/device/led.h"
 #include "src/system/device/power.h"
 #include "src/system/device/system.h"
+#include <stdio.h>
+#include <string.h>
 
 lv_obj_t *powersettings_screen;
 
@@ -48,6 +50,12 @@ static lv_obj_t *auto_off_switch, *auto_off_value, *auto_off_slider, *auto_off_c
 static lv_obj_t *led_on_switch, *led_off_switch, *led_off_card;
 static lv_obj_t *key_lock_switch;
 static lv_obj_t *adaptive_refresh_switch, *reading_dim_switch, *instant_turn_switch;
+static lv_obj_t *profile_value, *profile_slider, *auto_saver_switch, *battery_diag_label;
+static lv_timer_t *battery_diag_timer;
+static const char *const PROFILE_NAMES[POWER_PROFILE_COUNT] = {"Custom", "Performance", "Balanced", "Battery Saver", "Ultra Saver"};
+static power_profile_t selected_profile(void) {
+	return power_profile_valid(config_get_int("power", "profile", POWER_CUSTOM));
+}
 static lv_obj_t *standby_switch, *standby_value, *standby_slider, *standby_card;
 static lv_obj_t *charge_note;
 static lv_obj_t *axp_limit_switch, *axp_current_switch; // the R1's two, instead of the slider
@@ -131,6 +139,7 @@ void powersettings_apply(void) {
 	power_set_display_options(config_get_bool("power", "adaptive_refresh", true),
 							  config_get_bool("power", "reading_dim", false),
 							  config_get_bool("power", "instant_reading_turns", false));
+	power_set_profile(selected_profile(), config_get_bool("power", "auto_battery_saver", false));
 }
 
 static void refresh_labels(void) {
@@ -168,9 +177,15 @@ static void refresh_labels(void) {
 	}
 
 	set_checked(key_lock_switch, config_get_bool("power", "lock_keys_screen_off", false));
-	set_checked(adaptive_refresh_switch, config_get_bool("power", "adaptive_refresh", true));
-	set_checked(reading_dim_switch, config_get_bool("power", "reading_dim", false));
-	set_checked(instant_turn_switch, config_get_bool("power", "instant_reading_turns", false));
+	power_profile_t mode = selected_profile();
+	lv_label_set_text(profile_value, PROFILE_NAMES[mode]);
+	lv_slider_set_value(profile_slider, mode, LV_ANIM_OFF);
+	set_checked(auto_saver_switch, config_get_bool("power", "auto_battery_saver", false));
+	power_preset_t preset = power_preset(mode, config_get_bool("power", "adaptive_refresh", true),
+		config_get_bool("power", "reading_dim", false), config_get_bool("power", "instant_reading_turns", false));
+	set_checked(adaptive_refresh_switch, preset.adaptive);
+	set_checked(reading_dim_switch, preset.dim);
+	set_checked(instant_turn_switch, preset.instant);
 
 	// Standby and its wait, on one card like the automatic power-off below.
 	bool standby = config_get_bool("power", "standby_mem", true);
@@ -283,6 +298,8 @@ static void standby_toggled_cb(lv_event_t *e) {
 
 static void display_saver_changed_cb(lv_event_t *e) {
 	(void)e;
+	// Changing an individual option copies the shown settings into Custom.
+	config_set_int("power", "profile", POWER_CUSTOM);
 	config_set_bool("power", "adaptive_refresh", lv_obj_has_state(adaptive_refresh_switch, LV_STATE_CHECKED));
 	config_set_bool("power", "reading_dim", lv_obj_has_state(reading_dim_switch, LV_STATE_CHECKED));
 	config_set_bool("power", "instant_reading_turns", lv_obj_has_state(instant_turn_switch, LV_STATE_CHECKED));
@@ -291,9 +308,66 @@ static void display_saver_changed_cb(lv_event_t *e) {
 	refresh_labels();
 }
 
+static void profile_changed_cb(lv_event_t *e) {
+	(void)e;
+	config_set_int("power", "profile", power_profile_valid(lv_slider_get_value(profile_slider)));
+	config_save();
+	powersettings_apply();
+	refresh_labels();
+}
+
+static void auto_saver_changed_cb(lv_event_t *e) {
+	(void)e;
+	config_set_bool("power", "auto_battery_saver", lv_obj_has_state(auto_saver_switch, LV_STATE_CHECKED));
+	config_save();
+	powersettings_apply();
+	refresh_labels();
+}
+
+static void battery_diag_refresh(void) {
+	if (!battery_diag_label || !power_screen_is_on()) return;
+	power_diagnostics_t d;
+	power_get_diagnostics(&d);
+	char capacity[24] = "Unavailable", voltage[32] = "Unavailable", drain[48] = "Collecting data", remaining[48] = "Unavailable";
+	if (d.percent >= 0) snprintf(capacity, sizeof(capacity), "%d%%", d.percent);
+	if (d.millivolts > 0) snprintf(voltage, sizeof(voltage), "%d mV", d.millivolts);
+	if (d.plugged) snprintf(drain, sizeof(drain), "External power");
+	else if (d.drain_known) {
+		snprintf(drain, sizeof(drain), "%u.%u%% / h", d.drain_tenths_per_hour / 10, d.drain_tenths_per_hour % 10);
+		snprintf(remaining, sizeof(remaining), "~%u h %u min", d.estimated_minutes / 60, d.estimated_minutes % 60);
+	}
+	char report[512];
+	snprintf(report, sizeof(report),
+		"Battery: %s\nVoltage: %s\nPower: %s\nDrain: %s\nEstimated remaining: %s\nScreen-on since boot: %u h %u min\nEffective mode: %s\nWi-Fi: %s | BT: %s\nRadio parked: %s",
+		capacity, voltage, d.charging ? "Charging" : d.plugged ? "Plugged in" : d.percent >= 0 ? "On battery" : "Unknown",
+		drain, remaining, d.screen_on_seconds / 3600, d.screen_on_seconds / 60 % 60,
+		PROFILE_NAMES[power_profile_valid(power_get_effective_profile())],
+		d.wifi_on ? "On" : "Off", d.bluetooth_on ? "On" : "Off", d.parked ? "Yes" : "No");
+	if (strcmp(lv_label_get_text(battery_diag_label), report)) lv_label_set_text(battery_diag_label, report);
+}
+
+static void battery_diag_cb(lv_timer_t *timer) {
+	if (lv_screen_active() != powersettings_screen) { lv_timer_pause(timer); return; }
+	battery_diag_refresh();
+}
+
+static void power_page_loaded(lv_event_t *e) {
+	(void)e;
+	refresh_labels();
+	battery_diag_refresh();
+	if (battery_diag_timer) { lv_timer_reset(battery_diag_timer); lv_timer_resume(battery_diag_timer); }
+}
+
+static void power_page_unloaded(lv_event_t *e) {
+	(void)e;
+	if (battery_diag_timer) lv_timer_pause(battery_diag_timer);
+}
+
 void powersettings_init(gui_config_t *cfg) {
 	lv_obj_t *container = settingsrow_page(powersettings_screen, cfg, "power");
 
+	settingsrow_slider(container, "Power mode", POWER_PROFILE_COUNT, &profile_value, &profile_slider, profile_changed_cb);
+	settingsrow_toggle(container, "Auto saver at 20%", &auto_saver_switch, auto_saver_changed_cb);
 	// English fallback labels until the translated power-profile strings land.
 	settingsrow_toggle(container, "Adaptive UI refresh", &adaptive_refresh_switch, display_saver_changed_cb);
 	settingsrow_toggle(container, "Dim reading after 3 min", &reading_dim_switch, display_saver_changed_cb);
@@ -367,6 +441,17 @@ void powersettings_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(charge_note, &font_ui_22, 0);
 	lv_label_set_text(charge_note, pmic || power_charge_limit_supported() ? tr("power_auto_off_note")
 																	   : tr("power_charge_limit_unavailable"));
+
+ 	// Read-only session diagnostics. No extra sampling timer while hidden.
+	battery_diag_label = lv_label_create(container);
+	lv_obj_set_width(battery_diag_label, lv_pct(100));
+	lv_label_set_long_mode(battery_diag_label, LV_LABEL_LONG_WRAP);
+	lv_obj_set_style_text_font(battery_diag_label, &font_ui_20, 0);
+	lv_label_set_text(battery_diag_label, "Battery diagnostics (estimates vary with use)");
+	battery_diag_timer = lv_timer_create(battery_diag_cb, 5000, NULL);
+	if (battery_diag_timer) { lv_timer_pause(battery_diag_timer); power_pause_in_standby(battery_diag_timer); }
+	lv_obj_add_event_cb(powersettings_screen, power_page_loaded, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(powersettings_screen, power_page_unloaded, LV_EVENT_SCREEN_UNLOADED, NULL);
 
 	// Everything saved becomes effective now, at startup -- including the LED
 	// standby option, which lives in led.c rather than power.c.

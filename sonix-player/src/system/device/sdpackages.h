@@ -8,6 +8,13 @@
 #define SDPACKAGES_VERSION 64
 #define SDPACKAGES_MAX_BYTES (256u * 1024u * 1024u)
 #define SDPACKAGES_ASSET "Sonix-Books-SD-Packages.spk"
+#define SD_EXTRAS_COUNT 3
+#define SD_EXTRAS_MASK 7u
+// Fixed categories: fonts, dictionaries, native tools.
+const char *sdpackages_extra_asset(unsigned category);
+const char *sdpackages_extra_folder(unsigned category);
+const char *sdpackages_extra_base(unsigned category);
+bool sdpackages_extra_generation(const char *root, unsigned category, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]);
 typedef bool (*sdpackages_cancel_t)(void *user);
 typedef void (*sdpackages_progress_t)(uint64_t done, uint64_t total, void *user);
 typedef enum { SDPACKAGES_OK, SDPACKAGES_INVALID, SDPACKAGES_CORRUPT,
@@ -27,5 +34,7 @@ bool sdpackages_valid_version(const char *version);
 sdpackages_result_t sdpackages_install(const char *root, const char *archive,
 	const char *version, const char *sha256, sdpackages_cancel_t cancel,
 	sdpackages_progress_t progress, void *user);
+sdpackages_result_t sdpackages_install_extra(const char *root, unsigned category, const char *archive,
+	const char *version, const char *sha256, sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user);
 
 #endif

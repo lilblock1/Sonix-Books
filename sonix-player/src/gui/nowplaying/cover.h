@@ -38,6 +38,8 @@ void cover_set_cache_dir(const char *sd_root);
 // replaced under the open handle; covers cached in memory stay until they are
 // recycled.
 void cover_cache_reopen_if_replaced(void);
+// Reclaim SQLite's unused page cache without deleting any stored images.
+void cover_cache_trim_memory(void);
 
 // How a picture is mapped onto its box.
 typedef enum {

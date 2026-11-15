@@ -57,6 +57,10 @@ static char repo[128];
 static char stem[64];
 static bool checking_test;
 static unsigned extras_mask;
+static bool store_mode, store_valid;
+static game_store_item_t store_items[GAME_STORE_MAX];
+static size_t store_count;
+static unsigned store_index;
 static struct { long size; char url[512], sha[65]; } extras[SD_EXTRAS_COUNT];
 
 static unsigned char chunk[64 * 1024];
@@ -439,6 +443,7 @@ bool ota_check_start(void) {
 		return false;
 	}
 	release_valid = false;
+	store_mode = store_valid = false;
 	extras_mask = 0;
 	checking_test = ota_test_channel();
 
@@ -555,8 +560,31 @@ static ota_result_t download_extras_to_card(const char *root) {
 	return OTA_OK;
 }
 
+static ota_result_t download_game_to_card(const char *root, const struct statvfs *vfs) {
+	const game_store_item_t *item = &store_items[store_index];
+	uint64_t space = (uint64_t)vfs->f_bavail * (vfs->f_frsize ? vfs->f_frsize : vfs->f_bsize);
+	if (space < (uint64_t)item->size + SPACE_MARGIN) return OTA_NO_SPACE;
+	char generation[SDPACKAGES_VERSION], version[SDPACKAGES_VERSION];
+	if (sdpackages_game_generation(root, item->id, generation, version) &&
+		game_store_version_cmp(item->version, version) < 0) return OTA_UP_TO_DATE;
+	char part[120];
+	int n=snprintf(part,sizeof(part),"%s/.sonix-game-XXXXXX",root);
+	if(n<=0 || (size_t)n>=sizeof(part)) return OTA_DOWNLOAD_FAILED;
+	int fd=mkstemp(part);
+	if (fd<0) return OTA_DOWNLOAD_FAILED;
+	close(fd);
+	ota_result_t r=download_asset(item->url,item->size,item->sha256,part,0);
+	if (r==OTA_OK) {
+		sdpackages_result_t s=sdpackages_install_game(root,item->id,part,item->version,item->sha256,package_cancel,NULL,NULL);
+		r=s==SDPACKAGES_OK?OTA_OK:s==SDPACKAGES_CANCELLED?OTA_CANCELLED:
+			s==SDPACKAGES_NO_SPACE?OTA_NO_SPACE:s==SDPACKAGES_CORRUPT||s==SDPACKAGES_INVALID?OTA_CORRUPT:OTA_DOWNLOAD_FAILED;
+	}
+	unlink(part);
+	return r;
+}
+
 static ota_result_t do_download(void) {
-	if (!extras_mask) {
+	if (!extras_mask && !store_mode) {
 	char digest[80];
 	snprintf(digest, sizeof(digest), "sha256:%s", release.sha256);
 	if (!ota_policy_digest(digest) || !ota_policy_asset(repo, stem, release.url, release.size)) return OTA_CHECK_FAILED;
@@ -591,7 +619,7 @@ static ota_result_t do_download(void) {
 		close(card);
 		return OTA_NO_CARD;
 	}
-	ota_result_t result = extras_mask ? download_extras_to_card(root) : download_to_card(root, &vfs);
+	ota_result_t result = store_mode ? download_game_to_card(root, &vfs) : extras_mask ? download_extras_to_card(root) : download_to_card(root, &vfs);
 	close(card);
 	return result;
 }
@@ -641,7 +669,7 @@ static void *download_thread(void *unused) {
 }
 
 bool ota_download_start(void) {
-	if (extras_mask) return false;
+	if (extras_mask || store_mode) return false;
 	if (!release_valid || !begin(OTA_DOWNLOADING)) {
 		return false;
 	}
@@ -675,6 +703,7 @@ static void *extras_thread(void *unused) {
 
 bool ota_extras_start(unsigned mask) {
 	if (!mask || (mask & ~SD_EXTRAS_MASK) || !begin(OTA_CHECKING)) return false;
+	store_mode = store_valid = false;
 	extras_mask = mask;
 	checking_test = ota_test_channel();
 	release_valid = false;
@@ -684,6 +713,50 @@ bool ota_extras_start(unsigned mask) {
 	snprintf(stem, sizeof(stem), "%s", s ? s : "");
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, extras_thread, NULL)) finish(OTA_CHECK_FAILED);
+	else pthread_detach(thread);
+	return true;
+}
+
+static void *store_check_thread(void *unused) {
+	(void)unused;
+	thread_be_background("game store");
+	char ip[40];
+	if (!wifi_get_enabled() || !wifi_interface_address(ip,sizeof(ip))) {
+		finish(OTA_NO_NETWORK); return NULL;
+	}
+	char *body=NULL;
+	size_t length=0; int status=0;
+	const char *url="https://api.github.com/repos/" GAME_STORE_REPO "/releases/tags/" GAME_STORE_TAG;
+	bool ok=http_get_ex(url,API_HEADERS,false,&body,&length,GAME_STORE_JSON_MAX,LIST_TIMEOUT_SECS,&status);
+	if (ok && !cancelled() && length<GAME_STORE_JSON_MAX && !strncmp(http_last_final_url(),"https://api.github.com/",23) &&
+		game_store_parse(body,store_items,GAME_STORE_MAX,&store_count)) store_valid=true;
+	free(body);
+	finish(cancelled()?OTA_CANCELLED:store_valid?OTA_OK:OTA_CHECK_FAILED);
+	return NULL;
+}
+
+size_t ota_store_count(void) { return store_valid ? store_count : 0; }
+const game_store_item_t *ota_store_item(unsigned index) {
+	return store_valid && index<store_count ? &store_items[index] : NULL;
+}
+
+bool ota_store_check_start(void) {
+	if (!begin(OTA_CHECKING)) return false;
+	store_mode=true; store_valid=release_valid=false; store_count=0; extras_mask=0;
+	pthread_t thread;
+	if(pthread_create(&thread,NULL,store_check_thread,NULL)) finish(OTA_CHECK_FAILED);
+	else pthread_detach(thread);
+	return true;
+}
+
+bool ota_store_download_start(unsigned index) {
+	if(!store_mode || !store_valid || index>=store_count || !begin(OTA_DOWNLOADING)) return false;
+	store_index=index;
+	pthread_mutex_lock(&lock);
+	progress_total=store_items[index].size;
+	pthread_mutex_unlock(&lock);
+	pthread_t thread;
+	if(pthread_create(&thread,NULL,download_thread,NULL)) finish(OTA_DOWNLOAD_FAILED);
 	else pthread_detach(thread);
 	return true;
 }

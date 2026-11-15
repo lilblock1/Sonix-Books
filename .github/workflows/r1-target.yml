@@ -2,7 +2,7 @@ name: R1 device binary
 
 on:
   push:
-    branches: [main, 'codex/common-book-formats']
+    branches: [main, 'codex/common-book-formats', battery-optimization]
     paths:
       - '.github/workflows/**'
       - 'sonix-packer/assets/**'

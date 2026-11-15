@@ -228,7 +228,12 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 				json_obj_bool(doc, rel, "prerelease", true), tag)) {
 			continue;
 		}
-		if (ota_policy_version_cmp(version, installed) == 0 && find_named_asset(doc, rel, SDPACKAGES_ASSET) >= 0) {
+		// Selectable release assets belong to the Extras menu; do not force
+		// their combined bundle through a firmware-only check.
+		bool split = true;
+		for (unsigned k = 0; k < SD_EXTRAS_COUNT; ++k)
+			if (find_named_asset(doc, rel, sdpackages_extra_asset(k)) < 0) split = false;
+		if (!split && ota_policy_version_cmp(version, installed) == 0 && find_named_asset(doc, rel, SDPACKAGES_ASSET) >= 0) {
 			char active[SDPACKAGES_VERSION];
 			if (!sdpackages_active(storage_sd_root(), active) || strcmp(active, tag)) { same_rel = rel; same_asset = find_asset(doc, rel); }
 		}
@@ -288,7 +293,10 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 		return OTA_CHECK_FAILED;
 	}
 	int package = find_named_asset(doc, best_rel, SDPACKAGES_ASSET);
-	if (package >= 0) {
+	bool split = true;
+	for (unsigned k = 0; k < SD_EXTRAS_COUNT; ++k)
+		if (find_named_asset(doc, best_rel, sdpackages_extra_asset(k)) < 0) split = false;
+	if (package >= 0 && !split) {
 		release.packages_size = json_obj_long(doc, package, "size", 0);
 		json_obj_str(doc, package, "browser_download_url", release.packages_url, sizeof(release.packages_url));
 		if (!json_obj_str(doc, package, "digest", digest, sizeof(digest)) || !ota_policy_digest(digest) ||
@@ -301,19 +309,43 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 	return OTA_OK;
 }
 
+unsigned ota_extras_missing(unsigned mask) {
+	if (!storage_card_attached()) return mask & SD_EXTRAS_MASK;
+	long installed[4], existing[4];
+	if (!ota_policy_version(ota_installed_version(), installed)) return mask & SD_EXTRAS_MASK;
+	unsigned missing = 0;
+	for (unsigned k = 0; k < SD_EXTRAS_COUNT; ++k) {
+		if (!(mask & (1u << k))) continue;
+		char version[SDPACKAGES_VERSION];
+		if (!sdpackages_component_version(storage_sd_root(), k, version) ||
+			!ota_policy_version(version, existing) || ota_policy_version_cmp(installed, existing))
+			missing |= 1u << k;
+	}
+	return missing;
+}
+
 static ota_result_t pick_extras(const json_doc_t *doc) {
 	int root = json_root(doc);
 	long installed[4];
 	if (root < 0 || doc->toks[root].type != JSON_ARRAY ||
 		!ota_policy_version(ota_installed_version(), installed)) return OTA_CHECK_FAILED;
+	// Prefer stable when the same numeric firmware has been promoted.
+	// A test-channel installation may still use its exact matching test release.
+	for (int pass = 0; pass < 2; ++pass) {
+	if (pass && !checking_test) break;
 	for (int i = 0; i < json_len(doc, root); ++i) {
 		int rel = json_at(doc, root, i);
+		if (json_obj_bool(doc, rel, "prerelease", true) != (pass != 0)) continue;
 		char tag[32];
 		long version[4];
 		if (!json_obj_str(doc, rel, "tag_name", tag, sizeof(tag)) ||
 			!ota_policy_version(tag, version) || ota_policy_version_cmp(installed, version) ||
 			!ota_policy_release(true, json_obj_bool(doc, rel, "draft", true),
 				json_obj_bool(doc, rel, "prerelease", true), tag) || find_asset(doc, rel) < 0) continue;
+		bool complete = true;
+		for (unsigned k = 0; k < SD_EXTRAS_COUNT; ++k)
+			if ((extras_mask & (1u << k)) && find_named_asset(doc, rel, sdpackages_extra_asset(k)) < 0) complete = false;
+		if (!complete) continue;
 		memset(extras, 0, sizeof(extras));
 		long total = 0;
 		for (unsigned k = 0; k < SD_EXTRAS_COUNT; ++k) {
@@ -340,6 +372,7 @@ static ota_result_t pick_extras(const json_doc_t *doc) {
 		progress_total = total;
 		pthread_mutex_unlock(&lock);
 		return OTA_OK;
+	}
 	}
 	return OTA_EXTRAS_UNAVAILABLE;
 }
@@ -643,6 +676,7 @@ static void *extras_thread(void *unused) {
 bool ota_extras_start(unsigned mask) {
 	if (!mask || (mask & ~SD_EXTRAS_MASK) || !begin(OTA_CHECKING)) return false;
 	extras_mask = mask;
+	checking_test = ota_test_channel();
 	release_valid = false;
 	const char *r = sysinfo_ota_repo();
 	snprintf(repo, sizeof(repo), "%s", r && r[0] ? r : DEFAULT_REPO);

@@ -13,6 +13,8 @@ typedef struct {
 bool ebook_native_call(const char *path, const char *operation, uint32_t page,
 	epub_arena_t *arena, ebook_native_result_t *out);
 void ebook_native_error(const char *message);
+// Release RAM-backed executables after all current helper calls have exited.
+void ebook_native_trim(void);
 bool ebook_text_open(ebook_t *book);
 bool ebook_text_chapter(ebook_t *book, uint32_t chapter);
 

@@ -59,6 +59,8 @@ static bool checking_test;
 static unsigned extras_mask;
 static bool store_mode, store_valid;
 static game_store_item_t store_items[GAME_STORE_MAX];
+static uint8_t store_logos[GAME_STORE_MAX][GAME_LOGO_BYTES];
+static bool store_logo_valid[GAME_STORE_MAX];
 static size_t store_count;
 static unsigned store_index;
 static struct { long size; char url[512], sha[65]; } extras[SD_EXTRAS_COUNT];
@@ -728,14 +730,36 @@ static void *store_check_thread(void *unused) {
 	size_t length=0; int status=0;
 	const char *url="https://api.github.com/repos/" GAME_STORE_REPO "/releases/tags/" GAME_STORE_TAG;
 	bool ok=http_get_ex(url,API_HEADERS,false,&body,&length,GAME_STORE_JSON_MAX,LIST_TIMEOUT_SECS,&status);
-	if (ok && !cancelled() && length<GAME_STORE_JSON_MAX && !strncmp(http_last_final_url(),"https://api.github.com/",23) &&
-		game_store_parse(body,store_items,GAME_STORE_MAX,&store_count)) store_valid=true;
+	const char *final_url=http_last_final_url();
+	if(ok&&!cancelled()&&length<GAME_STORE_JSON_MAX&&final_url&&!strcmp(final_url,url)&&
+		game_store_parse(body,store_items,GAME_STORE_MAX,&store_count)) {
+		// Limit optional artwork work per refresh. Missing/failed artwork
+		// cannot prevent browsing or installing verified game packages.
+		unsigned attempted=0;
+		for(unsigned i=0;i<store_count&&!cancelled();++i){
+			if(!store_items[i].logo_url[0]||attempted>=12)continue;
+			++attempted;
+			char *pixels=NULL;size_t bytes=0;
+			if(http_get(store_items[i].logo_url,&pixels,&bytes,GAME_LOGO_BYTES+1,4)&&bytes==GAME_LOGO_BYTES){
+				sha256_ctx sha;char digest[65];sha256_init(&sha);sha256_update(&sha,pixels,bytes);sha256_final_hex(&sha,digest);
+				const char *last=http_last_final_url();
+				if(last&&!strncmp(last,"https://",8)&&!strcmp(digest,store_items[i].logo_sha256)){
+					memcpy(store_logos[i],pixels,bytes);store_logo_valid[i]=true;
+				}
+			}
+			free(pixels);
+		}
+		store_valid=true;
+	}
 	free(body);
 	finish(cancelled()?OTA_CANCELLED:store_valid?OTA_OK:OTA_CHECK_FAILED);
 	return NULL;
 }
 
 size_t ota_store_count(void) { return store_valid ? store_count : 0; }
+const uint8_t *ota_store_logo(unsigned index) {
+	return store_valid&&index<store_count&&store_logo_valid[index]?store_logos[index]:NULL;
+}
 const game_store_item_t *ota_store_item(unsigned index) {
 	return store_valid && index<store_count ? &store_items[index] : NULL;
 }
@@ -743,6 +767,7 @@ const game_store_item_t *ota_store_item(unsigned index) {
 bool ota_store_check_start(void) {
 	if (!begin(OTA_CHECKING)) return false;
 	store_mode=true; store_valid=release_valid=false; store_count=0; extras_mask=0;
+	memset(store_logo_valid,0,sizeof(store_logo_valid));
 	pthread_t thread;
 	if(pthread_create(&thread,NULL,store_check_thread,NULL)) finish(OTA_CHECK_FAILED);
 	else pthread_detach(thread);

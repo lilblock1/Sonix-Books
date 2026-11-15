@@ -208,7 +208,7 @@ static sdpackages_result_t extract(transfer_t *t, const member_t *member, const 
 	return result;
 }
 
-sdpackages_result_t sdpackages_install(const char *root, const char *archive, const char *version, const char *expected,
+static sdpackages_result_t install(const char *root, int category, const char *archive, const char *version, const char *expected,
 	sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user) {
 	if (!root || !root[0] || !archive || !sdpackages_valid_version(version) || !hex_digest(expected)) return SDPACKAGES_INVALID;
 	transfer_t transfer = {.cancel = cancel, .progress = progress, .user = user};
@@ -248,6 +248,11 @@ sdpackages_result_t sdpackages_install(const char *root, const char *archive, co
 		valid = item >= 0 && doc.toks[item].type == JSON_OBJECT && bytes >= 0 && (unsigned long)bytes <= 128u * 1024u * 1024u && packed > 0 &&
 			(unsigned long)packed <= SDPACKAGES_MAX_BYTES && manifest_string(&doc, item, "path", m->path, sizeof(m->path)) &&
 			safe_path(m->path) && manifest_string(&doc, item, "sha256", m->sha, sizeof(m->sha)) && hex_digest(m->sha);
+ 		if (valid && category >= 0) {
+			char prefix[64];
+			snprintf(prefix, sizeof(prefix), "Ebook/%s/", sdpackages_extra_folder((unsigned)category));
+			valid = !strncmp(m->path, prefix, strlen(prefix));
+		}
 		for (int j = 0; valid && j < i; j++) if (!strcasecmp(m->path, members[j].path)) valid = false;
 		if (valid) { m->bytes = (uint32_t)bytes; m->compressed = (uint32_t)packed; expanded += m->bytes; compressed += m->compressed; }
 	}
@@ -262,7 +267,7 @@ sdpackages_result_t sdpackages_install(const char *root, const char *archive, co
 	if (available < expanded + SPACE_MARGIN) { free(members); fclose(file); return SDPACKAGES_NO_SPACE; }
 	char sonix[PATH_SIZE], base[PATH_SIZE], stage[PATH_SIZE], final[PATH_SIZE], marker[PATH_SIZE];
 	valid = directory(root, false) && join(sonix, sizeof(sonix), root, ".sonix") && directory(sonix, true) &&
-		join(base, sizeof(base), sonix, "packages") && directory(base, true);
+		join(base, sizeof(base), sonix, category < 0 ? "packages" : sdpackages_extra_base((unsigned)category)) && directory(base, true);
 	int format = valid ? snprintf(stage, sizeof(stage), "%s/stage-XXXXXX", base) : -1;
 	if (format < 0 || (size_t)format >= sizeof(stage) || !mkdtemp(stage)) { free(members); fclose(file); return SDPACKAGES_IO; }
 	char new_generation[SDPACKAGES_VERSION];
@@ -276,7 +281,8 @@ sdpackages_result_t sdpackages_install(const char *root, const char *archive, co
 	free(members); fclose(file);
 	if (stopped(&transfer)) result = SDPACKAGES_CANCELLED;
 	char old[SDPACKAGES_VERSION] = "", old_version[SDPACKAGES_VERSION], complete[96];
-	(void)sdpackages_generation(root, old, old_version);
+	if (category < 0) (void)sdpackages_generation(root, old, old_version);
+	else (void)sdpackages_extra_generation(root, (unsigned)category, old, old_version);
 	if (result == SDPACKAGES_OK) {
 		snprintf(complete, sizeof(complete), "SDPKG1 %s\n", version);
 		if (!join(marker, sizeof(marker), stage, ".complete") || !write_text(marker, complete) || rename(stage, final)) result = SDPACKAGES_IO;
@@ -286,4 +292,14 @@ sdpackages_result_t sdpackages_install(const char *root, const char *archive, co
 	(void)remove_tree(stage, 0, &visits);
 	if (result == SDPACKAGES_OK) prune(base, new_generation, old);
 	return result;
+}
+
+sdpackages_result_t sdpackages_install(const char *root, const char *archive, const char *version, const char *sha256,
+	sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user) {
+	return install(root, -1, archive, version, sha256, cancel, progress, user);
+}
+sdpackages_result_t sdpackages_install_extra(const char *root, unsigned category, const char *archive, const char *version,
+	const char *sha256, sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user) {
+	if (category >= SD_EXTRAS_COUNT) return SDPACKAGES_INVALID;
+	return install(root, (int)category, archive, version, sha256, cancel, progress, user);
 }

@@ -1,3 +1,4 @@
+#include "src/gui/shell/gamelogo.h"
 #include "fwupdate.h"
 
 #include <stdio.h>
@@ -863,6 +864,7 @@ static void store_detail(unsigned i) {
 	bool newer=!installed||game_store_version_cmp(item->version,version)>0;
 	layout(item->title,store_kind(item->kind),true,false);
 	lv_obj_clean(notes_content);
+	gamelogo_create(notes_content,item->id,item->title,item->kind,ota_store_logo(i));
 	store_label(notes_content,item->description,&font_ui_22,false);
 	snprintf(line,sizeof(line),"Available: %s",item->version);
 	store_label(notes_content,line,&font_ui_20,true);
@@ -911,13 +913,22 @@ static void show_game_catalog(void) {
 			lv_obj_set_style_bg_color(tile,theme()->surface_pressed,0);
 			lv_obj_set_style_radius(tile,12,0);lv_obj_set_style_pad_all(tile,12,0);
 			lv_obj_set_style_pad_row(tile,5,0);
-			lv_obj_set_scrollable(tile,false);lv_obj_set_flex_flow(tile,LV_FLEX_FLOW_COLUMN);
+			lv_obj_set_scrollable(tile,false);lv_obj_set_flex_flow(tile,LV_FLEX_FLOW_ROW);
+			lv_obj_set_flex_align(tile,LV_FLEX_ALIGN_START,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
+			lv_obj_set_style_pad_column(tile,10,0);
 			lv_obj_add_event_cb(tile,store_detail_clicked,LV_EVENT_CLICKED,(void*)(uintptr_t)i);
-			store_label(tile,item->title,&font_ui_24_bold,false);
+			gamelogo_create(tile,item->id,item->title,item->kind,ota_store_logo(i));
+			lv_obj_t *text=lv_obj_create(tile);
+			lv_obj_set_height(text,LV_SIZE_CONTENT);lv_obj_set_flex_grow(text,1);
+			lv_obj_set_style_bg_opa(text,0,0);lv_obj_set_style_border_width(text,0,0);
+			lv_obj_set_style_pad_all(text,0,0);lv_obj_set_style_pad_row(text,4,0);
+			lv_obj_set_scrollable(text,false);lv_obj_set_clickable(text,false);
+			lv_obj_set_flex_flow(text,LV_FLEX_FLOW_COLUMN);
+			store_label(text,item->title,&font_ui_24_bold,false);
 			snprintf(line,sizeof(line),"%s  -  %s",item->version,size);
-			store_label(tile,line,&font_ui_20,true);
+			store_label(text,line,&font_ui_20,true);
 			const char *state=!installed?"Ready to install":compare>0?"Update available":"Installed";
-			lv_obj_t *label=store_label(tile,state,&font_ui_20_bold,false);
+			lv_obj_t *label=store_label(text,state,&font_ui_20_bold,false);
 			if(compare>0)lv_obj_set_style_text_color(label,theme()->text_primary,0);
 		}
 	}

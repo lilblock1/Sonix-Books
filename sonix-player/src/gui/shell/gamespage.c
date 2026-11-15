@@ -245,15 +245,17 @@ static void refresh_library(lv_event_t *e) {
 static void build_controls(bool puzzle) {
 	for(unsigned i=0;i<widget_count;++i)lv_obj_delete(control_widgets[i]);
 	widget_count=zone_count=0;
-	lv_label_set_text(control_hint,puzzle?"Move tiles  |  Undo with B":"Hold direction and action together");
+	lv_label_set_text(control_hint,puzzle?"Move tiles  |  Auto-save on exit":"Hold direction and action together");
 	if(puzzle){
 		// Dedicated wide directional targets, no unused emulator buttons.
 		pad("UP",176,400,128,84,game_key,1u<<4);
 		pad("LEFT",38,490,128,84,game_key,1u<<6);
 		pad("RIGHT",314,490,128,84,game_key,1u<<7);
 		pad("DOWN",176,580,128,84,game_key,1u<<5);
-		pad("B: Undo",18,584,144,72,game_key,1u<<0);
-		pad("New game",318,584,144,72,game_key,1u<<3);
+		pad("Undo",12,702,142,64,game_key,1u<<0);
+		pad("New game",169,702,142,64,game_key,1u<<3);
+		pad("Exit",326,702,142,64,leave_play,0);
+		return;
 	}else{
 		// R1 portrait layout with larger side-by-side thumb targets.
 		pad("L",12,394,132,52,game_key,1u<<10);pad("R",336,394,132,52,game_key,1u<<11);

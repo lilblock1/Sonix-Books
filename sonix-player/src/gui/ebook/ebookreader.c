@@ -9,6 +9,7 @@
 #include "src/system/ebook/ebook.h"
 #include "src/system/ebook/ebookhistory.h"
 #include "src/system/ebook/ebookprogress.h"
+#include "src/system/ebook/ebook_native.h"
 #include "src/system/input/readingkeys.h"
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookbar.h"
@@ -206,13 +207,37 @@ static void apply_colours(void) {
 // where the reading was left
 // ---------------------------------------------------------------------------
 
-// Progress extends the existing position value, preserving its three-number
-// prefix and path hash. Saving still flushes once at the existing save points.
+// Keep the newest progress in the existing store immediately, but coalesce
+// disk rewrites. The deadline is set on the first change, not each page turn,
+// so rapid continuous reading cannot postpone a checkpoint indefinitely.
+#define PROGRESS_SAVE_MS 5000u
+static lv_timer_t *progress_save_timer;
+static bool progress_pending;
+
+void ebookreader_flush_progress(void) {
+	if (!progress_pending) return;
+	if (config_store_save(config_ebook_store())) {
+		progress_pending = false;
+		if (progress_save_timer) lv_timer_pause(progress_save_timer);
+	}
+}
+
+static void progress_save_cb(lv_timer_t *timer) {
+	(void)timer;
+	ebookreader_flush_progress();
+}
+
 static void position_save(void) {
 	if (!book || !ebook_chapter_loaded(book)) return;
 	reader_progress = progress_now(false);
 	ebookprogress_store(ebook_path(book), &reader_progress);
-	config_store_save(config_ebook_store());
+	if (!progress_pending && progress_save_timer) {
+		lv_timer_reset(progress_save_timer);
+		lv_timer_resume(progress_save_timer);
+	}
+	progress_pending = true;
+	if (!progress_save_timer || reader_progress.state == EBOOKPROGRESS_FINISHED)
+		ebookreader_flush_progress();
 }
 
 static void position_load(const char *path, uint32_t *spine, uint32_t *block, uint32_t *offset) {
@@ -2978,11 +3003,14 @@ static void reader_unloaded_cb(lv_event_t *e) {
 	ebookfonts_close();
 	if (book) {
 		position_save();
+		ebookreader_flush_progress();
 		ebook_log_memory(book, "before closing");
 		ebook_close(book);
 		book = NULL;
 		ebook_log_memory(NULL, "closed");
 	}
+	ebook_native_trim();
+	cover_cache_trim_memory();
 	power_hold_screen_on(false);
 }
 
@@ -3005,7 +3033,7 @@ void ebookreader_open(const char *path) {
 		return;
 	}
 	if (book) {
-		zoom_close(); walk_reset(); position_save();
+		zoom_close(); walk_reset(); position_save(); ebookreader_flush_progress();
 		if (page_box) lv_obj_clean(page_box);
 		if (page_spare) lv_obj_clean(page_spare);
 		if (count_box) lv_obj_clean(count_box);
@@ -3013,6 +3041,7 @@ void ebookreader_open(const char *path) {
 		book = NULL;
 	}
 
+	cover_cache_trim_memory();
 	book = ebook_open(path);
 	if (!book) {
 		want_position = false; // it was for this open and this open is not happening
@@ -3129,6 +3158,8 @@ void ebookreader_init(gui_config_t *cfg) {
 	lv_obj_set_scrollable(count_box, false);
 	lv_obj_set_clickable(count_box, false);
 	lv_obj_set_flex_flow(count_box, LV_FLEX_FLOW_COLUMN);
+	progress_save_timer = lv_timer_create(progress_save_cb, PROGRESS_SAVE_MS, NULL);
+	if (progress_save_timer) lv_timer_pause(progress_save_timer);
 	count_timer = lv_timer_create(count_timer_cb, COUNT_PERIOD_MS, NULL);
 	lv_timer_pause(count_timer);
 	power_pause_in_standby(count_timer);

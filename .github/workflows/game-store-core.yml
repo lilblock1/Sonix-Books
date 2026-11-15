@@ -71,6 +71,16 @@ jobs:
           "${compiler}strip" --strip-unneeded "$staging/core.so"
           mkdir -p "$staging/source"
           cp "$dir"/core.c "$dir"/Makefile "$staging/source/"
+          # Optional title artwork: fixed RGB565, no image decoder on R1.
+          if [ -f "$dir/logo.py" ]; then
+            python3 "$dir/logo.py" "$staging/logo.rgb565"
+            cp "$dir/logo.py" "$staging/source/"
+          elif [ -f "$dir/logo.rgb565" ]; then
+            cp "$dir/logo.rgb565" "$staging/logo.rgb565"
+          fi
+          if [ -f "$staging/logo.rgb565" ]; then
+            test "$(wc -c < "$staging/logo.rgb565")" -eq 4608
+          fi
           for license in LICENSE LICENSE.txt COPYING; do
             if [ -f "$license" ]; then cp "$license" "$staging/LICENSE"; break; fi
           done
@@ -81,6 +91,9 @@ jobs:
           set -eu
           mkdir -p game-artifact
           asset="sonix-game-v1-$CORE_ID-$CORE_VERSION.spk"
+          if [ -f "core-stage/Games/$CORE_ID/logo.rgb565" ]; then
+            cp "core-stage/Games/$CORE_ID/logo.rgb565" "game-artifact/sonix-logo-v1-$CORE_ID-$CORE_VERSION.rgb565"
+          fi
           python3 - "$CORE_ID" <<'PY'
           import sys,zipfile
           from pathlib import Path
@@ -155,4 +168,9 @@ jobs:
           assert r['tagName']=='sonix-game-store-v1' and r['isPrerelease'] and not r['isDraft']
           assert all(a['name']!=os.environ['ASSET'] for a in r['assets']), 'Version already published; do not overwrite'
           PY
+          logo="sonix-logo-v1-$(printf '%s' "$asset" | sed 's/^sonix-game-v1-//;s/\.spk$/.rgb565/')"
+          if [ -f "candidate/$logo" ]; then
+            test "$(wc -c < "candidate/$logo")" -eq 4608
+            gh release upload sonix-game-store-v1 "candidate/$logo"
+          fi
           gh release upload sonix-game-store-v1 "candidate/$asset"

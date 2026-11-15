@@ -23,6 +23,8 @@ def png():
 def fixtures(folder):
     (folder / 'book.html').write_text('<html><head><title>Reader test</title></head><body><h1>Sonix</h1><p>Native reader sample.</p></body></html>')
     (folder / 'book.md').write_text('# Sonix\n\nNative reader **sample**.\n')
+    for alias, source in (('htm', 'html'), ('xhtml', 'html'), ('markdown', 'md')):
+        (folder / ('book.' + alias)).write_bytes((folder / ('book.' + source)).read_bytes())
     (folder / 'book.rtf').write_text(r'{\rtf1\ansi\ansicpg1252 Sonix\par Native reader sample.}')
     (folder / 'book.fb2').write_text('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>other</genre><book-title>Sonix</book-title><lang>en</lang></title-info></description><body><section><p>Native reader sample.</p></section></body></FictionBook>')
     with zipfile.ZipFile(folder / 'book.fbz', 'w') as archive:
@@ -99,7 +101,7 @@ def main():
                 env = dict(os.environ, SONIX_BOOKTOOL=str(args.tool.resolve()))
                 return subprocess.check_output([str(driver), str(book), str(folder)], env=env, timeout=90)
             return b''
-        for extension in ('html', 'md', 'rtf', 'fb2', 'fbz', 'docx', 'odt', 'pdf', 'xps', 'oxps', 'cbz', 'cbr', 'cbt'):
+        for extension in ('html', 'htm', 'xhtml', 'md', 'markdown', 'rtf', 'fb2', 'fbz', 'docx', 'odt', 'pdf', 'xps', 'oxps', 'cbz', 'cbr', 'cbt'):
             book = folder / ('book.' + extension)
             pages, flags, _, _ = call(args.tool, 'info', book, folder)
             assert pages > 0
@@ -127,6 +129,12 @@ def main():
                 assert call(args.tool, 'prepare', book, folder)[2] == prepared
                 if driver:
                     assert b'Native reader sample.' in frontend_read(book)
+                if extension == 'mobi':
+                    for alias in ('azw', 'prc'):
+                        copy = folder / ('book.' + alias); copy.write_bytes(book.read_bytes())
+                        assert call(args.tool, 'prepare', copy, folder)[2] == prepared
+                        if driver:
+                            assert b'Native reader sample.' in frontend_read(copy)
                 print(extension, 'passed', flush=True)
 
 

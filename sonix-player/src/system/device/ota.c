@@ -59,6 +59,8 @@ static bool checking_test;
 static unsigned extras_mask;
 static bool store_mode, store_valid;
 static game_store_item_t store_items[GAME_STORE_MAX];
+static store_ui_t store_ui;
+static char store_ui_digest[65];
 static uint8_t store_logos[GAME_STORE_MAX][GAME_LOGO_BYTES];
 static char store_logo_digest[GAME_STORE_MAX][65];
 static unsigned store_logo_cursor;
@@ -739,6 +741,24 @@ static void *store_check_thread(void *unused) {
 	const char *final_url=http_last_final_url();
 	if(ok&&!cancelled()&&length<GAME_STORE_JSON_MAX&&final_url&&!strcmp(final_url,url)&&
 		game_store_parse(body,store_items,GAME_STORE_MAX,&store_count)) {
+		// Fetch only the newest schema-compatible presentation asset. No
+		// persistent writes: a broken layout leaves the last good or built-in UI.
+		store_ui_asset_t appearance;
+		if(store_ui_find_asset(body,&appearance)&&!cancelled()&&
+			strcmp(store_ui_digest,appearance.sha256)&&
+			(!store_ui.version[0]||game_store_version_cmp(appearance.version,store_ui.version)>0)){
+			char *config=NULL;size_t bytes=0;
+			if(http_get(appearance.url,&config,&bytes,GAME_STORE_UI_MAX+1,5)&&bytes==appearance.size&&
+				!memchr(config,0,bytes)){
+				sha256_ctx sha;char digest[65];sha256_init(&sha);sha256_update(&sha,config,bytes);sha256_final_hex(&sha,digest);
+				const char *last=http_last_final_url();store_ui_t candidate;
+				if(!cancelled()&&last&&!strncmp(last,"https://",8)&&!strcmp(digest,appearance.sha256)&&
+					store_ui_parse(config,appearance.version,&candidate)){
+					store_ui=candidate;memcpy(store_ui_digest,digest,sizeof(digest));
+				}
+			}
+			free(config);
+		}
 		// Limit optional artwork work per refresh. Missing/failed artwork
 		// cannot prevent browsing or installing verified game packages.
 		// Retain digest-keyed art across refreshes, dropping obsolete versions.
@@ -776,6 +796,11 @@ static void *store_check_thread(void *unused) {
 }
 
 size_t ota_store_count(void) { return store_valid ? store_count : 0; }
+void ota_store_ui(store_ui_t *out) {
+	if(!out)return;
+	if(store_valid&&store_ui.version[0])*out=store_ui;
+	else store_ui_default(out);
+}
 const uint8_t *ota_store_logo(unsigned index) {
 	if(!store_valid||index>=store_count)return NULL;
 	int slot=store_logo_slot(store_items[index].logo_sha256);

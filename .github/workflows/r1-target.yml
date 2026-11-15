@@ -200,7 +200,7 @@ jobs:
 
   publish-test:
     needs: [checks, target, native-readers, sd-packages]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/downloadable-extras' && contains(github.event.head_commit.message, '[r1-publish-test]')))
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -246,13 +246,14 @@ jobs:
           Review the notes, keep a working installer, charge to at least 50%, and keep power stable.
           Stable remains a separate channel. No automatic installation occurs.
 
-          Large reader engines, fonts and dictionaries are outside the internal firmware image.
-          The SD Packages asset is verified and installed on the SD card by the Wi-Fi updater.
-          When upgrading from an older updater, check for updates again after reboot to install the matching SD packages.
-          Custom files under Ebook/Fonts and Ebook/Dictionaries are preserved.
+          Update 11 test: unified Game Launcher, independently updated GitHub Game Store (More), and Downloadable Extras (Settings).
+          The store initially has no games until individual content releases are published. Refresh the store to discover new versions without flashing firmware.
+          Optional reader engines, fonts and dictionaries are distributed as separate verified SD packages. Use Downloadable Extras after reboot to select them.
+          Existing custom files and save files are outside managed package generations. Native game execution and R1 controls still require physical testing.
           NOTES
+          # A pre-Update-11 updater would automatically fetch a combined bundle.
+          # Keep that bundle as a CI artifact; install individual SD extras only when selected.
           gh release create "$tag" candidate/r1.upt candidate/SHA256SUMS candidate/r1-build-report.json \
-            sd-packages/Sonix-Books-SD-Packages.spk sd-packages/Sonix-Books-SD-Packages.spk.sha256 sd-packages/sd-packages-report.json \
             individual-extras/*.spk individual-extras/*.sha256 individual-extras/*-report.json \
             native-r1/Sonix-Books-Native-Readers-r1.zip native-r1/Sonix-Books-Native-Readers-r1.zip.sha256 \
             extras/reading-fonts/Sonix-Books-Fonts.zip extras/reading-fonts/Sonix-Books-Fonts.zip.sha256 \

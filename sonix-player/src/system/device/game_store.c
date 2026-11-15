@@ -118,6 +118,28 @@ bool game_store_parse(const char *body, game_store_item_t *items, size_t capacit
 		if(k==*count) { if(*count>=capacity) {ok=false;break;} ++*count; }
 		items[k]=item;
 	}
+	// Artwork is a separate fixed-size, immutable release asset associated
+	// with the selected package version. It cannot change package identity.
+	for(size_t k=0;ok&&k<*count;++k) {
+		char wanted[128],expected[256];
+		int n=snprintf(wanted,sizeof(wanted),"sonix-logo-v1-%s-%s.rgb565",items[k].id,items[k].version);
+		if(n<=0||(size_t)n>=sizeof(wanted))continue;
+		n=snprintf(expected,sizeof(expected),"https://github.com/%s/releases/download/%s/%s",GAME_STORE_REPO,GAME_STORE_TAG,wanted);
+		if(n<=0||(size_t)n>=sizeof(expected))continue;
+		for(int i=0;i<json_len(&doc,assets);++i) {
+			int a=json_at(&doc,assets,i);
+			char name[128],state[24],url[256],digest[80];
+			if(!json_obj_str(&doc,a,"name",name,sizeof(name))||strcmp(name,wanted)||
+				json_obj_long(&doc,a,"size",0)!=GAME_LOGO_BYTES||
+				!json_obj_str(&doc,a,"state",state,sizeof(state))||strcmp(state,"uploaded")||
+				!json_obj_str(&doc,a,"browser_download_url",url,sizeof(url))||strcmp(url,expected)||
+				!json_obj_str(&doc,a,"digest",digest,sizeof(digest))||!ota_policy_digest(digest))continue;
+			memcpy(items[k].logo_url,expected,strlen(expected)+1);
+			memcpy(items[k].logo_sha256,digest+7,65);
+			for(unsigned j=0;j<64;++j)if(items[k].logo_sha256[j]>='A'&&items[k].logo_sha256[j]<='F')items[k].logo_sha256[j]+='a'-'A';
+			break;
+		}
+	}
 	json_free(&doc);
 	if(!ok) *count=0;
 	return ok;

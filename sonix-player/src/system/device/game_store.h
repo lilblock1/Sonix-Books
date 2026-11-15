@@ -9,6 +9,8 @@
 #define GAME_STORE_MAX 48
 #define GAME_STORE_JSON_MAX (256u * 1024u)
 #define GAME_STORE_ABI 1
+#define GAME_LOGO_SIDE 48u
+#define GAME_LOGO_BYTES (GAME_LOGO_SIDE*GAME_LOGO_SIDE*2u)
 
 typedef enum { GAME_STORE_OTHER=0, GAME_STORE_GAME, GAME_STORE_EMULATOR } game_store_kind_t;
 typedef struct {
@@ -28,6 +30,7 @@ typedef struct {
 	long size;
 	char title[64], description[160];
 	game_store_kind_t kind;
+	char logo_url[256], logo_sha256[65];
 } game_store_item_t;
 
 // GitHub release metadata is the catalog. No arbitrary URLs, package paths,

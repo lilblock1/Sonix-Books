@@ -37,4 +37,24 @@ typedef struct {
 // executable names or commands are accepted from the server.
 bool game_store_parse(const char *json, game_store_item_t *items, size_t capacity, size_t *count);
 int game_store_version_cmp(const char *a, const char *b);
+
+// Versioned display-only configuration; no executable code or file paths.
+#define GAME_STORE_UI_MAX 4096u
+typedef enum { STORE_UI_LIST, STORE_UI_CARDS, STORE_UI_GRID } store_ui_layout_t;
+typedef enum { STORE_UI_SYSTEM, STORE_UI_OCEAN, STORE_UI_FOREST, STORE_UI_AMBER, STORE_UI_PLUM } store_ui_palette_t;
+typedef struct {
+	char version[SDPACKAGES_VERSION];
+	char heading[40], subtitle[120];
+	store_ui_layout_t layout;
+	store_ui_palette_t palette;
+	unsigned radius, padding, gap, logo_size;
+	bool emulators_first, show_descriptions;
+} store_ui_t;
+typedef struct {
+	char version[SDPACKAGES_VERSION], url[256], sha256[65];
+	size_t size;
+} store_ui_asset_t;
+void store_ui_default(store_ui_t *out);
+bool store_ui_parse(const char *body,const char *version,store_ui_t *out);
+bool store_ui_find_asset(const char *catalog,store_ui_asset_t *out);
 #endif

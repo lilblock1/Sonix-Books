@@ -44,12 +44,20 @@ int main(void) {
 	assert(!strcmp(old.text, "An old excerpt: with a colon"));
 	assert(bookmark_save(book, -1, &old) == BOOKMARK_DUPLICATE);
 	// Separators, whitespace, line breaks and INI-looking text round-trip exactly.
-	strcpy(old.name, "  Caf� | ?? = [name]  ");
-	strcpy(old.note, "First line\n[ebook]\nfont_size = 99\nSecond: | = ; #\t??  ");
+	strcpy(old.name, "  Café | 世界 = [name]  ");
+	strcpy(old.note, "First line\n[ebook]\nfont_size = 99\nSecond: | = ; #\t🙂  ");
 	assert(bookmark_save(book, 0, &old) == BOOKMARK_OK); reload(); assert_mark(0, &old);
 	assert(!strcmp(config_store_get(store, "ebook", "pos_existing", ""), "3:14:8|p1:37:0"));
 	assert(!strcmp(config_store_get(store, "ebook", "font_file", ""), "OpenDyslexic/Regular.otf"));
 	assert(!strcmp(config_store_get(store, "ebook", "font_size", "missing"), "missing"));
+	// Corrupt annotation data is ignored without losing a valid bookmark.
+	key(entrykey, sizeof(entrykey), 't', 0);
+	config_store_set(store, "bookmarks", entrykey, "not hex");
+	bookmark_t corrupt; assert(bookmark_get(book, 0, &corrupt) && !corrupt.name[0] && corrupt.note[0]);
+	assert(bookmark_save(book, 0, &old) == BOOKMARK_OK);
+	config_change_t invalid_change = {"unsafe", "line\n[ebook]"};
+	assert(config_store_apply(store, "bookmarks", &invalid_change, 1) == CONFIG_APPLY_INVALID);
+	assert_mark(0, &old);
 	// Position is immutable during edit; rejected edits leave the old value.
 	bookmark_t bad = old; bad.spine++;
 	assert(bookmark_save(book, 0, &bad) == BOOKMARK_INVALID); assert_mark(0, &old);
@@ -63,7 +71,7 @@ int main(void) {
 	bookmark_t second = {.spine = 7, .block = 9, .offset = 11};
 	memset(second.name, 'N', sizeof(second.name) - 1);
 	memset(second.note, 'a', sizeof(second.note) - 1);
-	memcpy(second.note + 59, "??", 6);
+	memcpy(second.note + 59, "世界", 6);
 	strcpy(second.text, "Second excerpt");
 	assert(bookmark_save(book, -1, &second) == BOOKMARK_OK); reload(); assert_mark(1, &second);
 	assert(bookmark_find(book, 7, 9, 11) == 1);
@@ -117,6 +125,13 @@ int main(void) {
 	assert(!bookmark_count("/card/Ebook/new.epub")); reload(); assert(bookmark_count(book) == 64);
 	assert(bookmark_remove(book, 30)); reload();
 	assert(bookmark_count(book) == 63 && bookmark_get(book, 30, &got) && got.spine == 31 && got.name[0] && got.note[0]);
+	// The longest valid position still leaves a bounded, complete UTF-8 snippet.
+	remove(config); (void)config_store_init(store, config);
+	bookmark_t largest = {.spine = UINT32_MAX, .block = UINT32_MAX, .offset = UINT32_MAX};
+	memset(largest.text, 'x', sizeof(largest.text) - 1);
+	assert(bookmark_save(book, -1, &largest) == BOOKMARK_OK); reload();
+	assert(bookmark_get(book, 0, &got) && got.spine == UINT32_MAX && got.offset == UINT32_MAX);
+	assert(strlen(got.text) == 94);
 	puts("bookmark notes: legacy, Unicode, boundaries, isolation, deletion, full storage and failed-save rollback passed");
 	remove(config); assert(rmdir(temp) == 0);
 	return 0;

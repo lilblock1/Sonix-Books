@@ -4,7 +4,8 @@ Working baseline: `8dcb754968d6ad4b1f89a0aed98592e9a3cc0720`, tested by Noah
 on his HiBy R1. Development branch: `reading-overhaul`.
 
 Noah authorized a test firmware build after item 6, including items 1-6.
-Items 7-9 remain for later work.
+Item 7 is being implemented on `codex/named-bookmarks-notes`; items 8-9 remain for later work.
+The item 7 request authorizes source changes and checks, without another firmware release.
 Do not poll build status; Noah will report results. Component checks are allowed.
 Preserve the working kernel/drivers and the firmware size/integrity safeguards.
 

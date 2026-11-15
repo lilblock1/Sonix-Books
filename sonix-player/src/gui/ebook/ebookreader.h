@@ -8,6 +8,8 @@
 extern lv_obj_t *ebookreader_screen;
 
 void ebookreader_init(gui_config_t *cfg);
+// GUI-thread checkpoint before blanking or power-off.
+void ebookreader_flush_progress(void);
 
 // Opens `path` and shows it at wherever it was left off. The book stays open
 // for as long as this screen is up and is closed -- arenas, ZIP and fonts --

@@ -1,0 +1,90 @@
+name: Build one Sonix game core (no firmware)
+on:
+  push:
+    branches: [game-store-content]
+    paths: ['game-store/core-request.json']
+permissions:
+  contents: read
+jobs:
+  core:
+    if: contains(github.event.head_commit.message, '[game-check]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: sonix-player/rockbox-toolchain
+          key: r1-player-toolchain-ubuntu24-${{ hashFiles('sonix-player/rockboxdev/**') }}
+      - name: Build and validate only the requested native core
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          r=json.loads(Path('game-store/core-request.json').read_text())
+          assert re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?',r['id'])
+          assert re.fullmatch(r'v(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})',r['version'])
+          assert (Path('game-store/cores')/r['id']/'Makefile').is_file()
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('CORE_ID='+r['id']+'\nCORE_VERSION='+r['version']+'\n')
+          PY
+      - name: Compile MIPS core and verify exported ABI and runtime dependencies
+        run: |
+          set -eu
+          compiler="$PWD/sonix-player/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-"
+          test -x "${compiler}gcc"
+          dir="game-store/cores/$CORE_ID"
+          make -C "$dir" check
+          staging="$PWD/core-stage/Games/$CORE_ID"
+          mkdir -p "$staging"
+          make -C "$dir" core CC="${compiler}gcc" OUT="$staging/core.so" CFLAGS="-Os -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -fdata-sections"
+          "${compiler}readelf" -h -d -l -V -Ws "$staging/core.so" > core-elf.txt
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          s=Path('core-elf.txt').read_text()
+          assert 'ELF32' in s and 'little endian' in s and 'MIPS' in s
+          assert re.search(r'Type:\s+DYN',s)
+          assert 'Requesting program interpreter' not in s
+          assert all(tuple(map(int,v)) <= (2,19) for v in re.findall(r'GLIBC_(\d+)\.(\d+)',s))
+          needed=set(re.findall(r'Shared library: \[([^\]]+)\]',s))
+          assert needed <= {'libc.so.6','libm.so.6','libgcc_s.so.1'},needed
+          for symbol in ('retro_api_version','retro_init','retro_deinit','retro_load_game','retro_unload_game','retro_run','retro_get_system_info','retro_get_system_av_info','retro_set_environment','retro_set_video_refresh','retro_set_input_poll','retro_set_input_state','retro_serialize','retro_unserialize'):
+              assert any(re.search(r'\b'+symbol+r'$',line) and ' UND ' not in line and ' GLOBAL ' in line for line in s.splitlines()),symbol
+          PY
+          "${compiler}strip" --strip-unneeded "$staging/core.so"
+          mkdir -p "$staging/source"
+          cp "$dir"/core.c "$dir"/Makefile "$staging/source/"
+          for license in LICENSE LICENSE.txt COPYING; do
+            if [ -f "$license" ]; then cp "$license" "$staging/LICENSE"; break; fi
+          done
+          test -s "$staging/LICENSE"
+          cp core-elf.txt "$staging/core-elf.txt"
+      - name: Create independent package and verify real SD installer
+        run: |
+          set -eu
+          mkdir -p game-artifact
+          asset="sonix-game-v1-$CORE_ID-$CORE_VERSION.spk"
+          python3 - "$CORE_ID" <<'PY'
+          import sys,zipfile
+          from pathlib import Path
+          root=Path('core-stage')
+          with zipfile.ZipFile('game.zip','w',compression=zipfile.ZIP_DEFLATED) as archive:
+              for p in sorted(root.rglob('*')):
+                  if p.is_file(): archive.write(p,p.relative_to(root).as_posix())
+          PY
+          python3 sonix-player/tools/build_sd_packages.py --game "$CORE_ID" --version "$CORE_VERSION" --output "game-artifact/$asset" game.zip > game-artifact/report.json
+          gcc -std=c11 -Wall -Wextra -Werror -Isonix-player sonix-player/tests/sdpackages_driver.c \
+            sonix-player/src/system/device/sdpackages.c sonix-player/src/system/device/sdpackages_paths.c \
+            sonix-player/src/system/core/json.c sonix-player/src/system/core/sha256.c -o game-install-check
+          card="$(mktemp -d)"
+          sha="$(sha256sum "game-artifact/$asset" | cut -d' ' -f1)"
+          test "$(./game-install-check "$card" "game-artifact/$asset" "$CORE_VERSION" "$sha" 0 "game:$CORE_ID")" = "0 $CORE_VERSION"
+          test "$(find "$card" -name core.so -type f | wc -l)" -eq 1
+          cp core-elf.txt game-artifact/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonix-game-candidate
+          path: game-artifact/
+          retention-days: 30

@@ -1,85 +1,48 @@
-# Sonix Books
+# Sonix Books — HiBy R1 only
 
-A reading-first fork of [Sonix Player](https://github.com/Jepl4r/sonix-player) by Jepl4r, developed for the HiBy R1. Books and games are the main activities; music remains available. This fork uses AI-assisted development and retains the upstream GPL-3.0 license and attribution.
+**Custom firmware exclusively developed for the HiBy R1.**
 
-**Development version: no tested Sonix Books device firmware has been released yet.** The automated build below produces a Linux simulator, not a flashable `.upt`. Do not rename a simulator artifact to `r1.upt`.
+A reading-first fork of [Sonix Player](https://github.com/Jepl4r/sonix-player) by Jepl4r. Books and games are the main activities; music remains available. This fork uses AI-assisted development and retains the upstream GPL-3.0 license and attribution.
 
-### First development update
+> [!IMPORTANT]
+> The HiBy R1 is the only device the maintainer owns and can test. Sonix Books supports the **HiBy R1 only**. Other HiBy models, including the R3 Pro II, are unsupported by this fork. Do not install Sonix Books firmware on any other device. The recovery updater may not verify the target model.
 
-- Home: Books, Continue reading, Games, Music, More, Settings.
-- Continue reading reopens the last successfully read EPUB at its saved position. It resolves the book against the current card, handles missing files, and puts the last book first on the shelf.
-- Short Previous/Next presses turn pages or scroll; short Play/Pause opens the reading menu. These follow the existing button mappings. Long-press seeking and volume mappings retain upstream behavior.
-- Games groups Game Boy/Game Boy Color and Flappy Bird. Short Play/Pause opens the Game Boy pause menu. The GB/GBC library tab is remembered.
-- Updates use this fork, including when system-info.json has no repository field.
+## Releases and installation
 
-Copy DRM-free EPUB files to `Ebook/` at the card root. Game Boy ROMs go in `Games/GB/`, and Game Boy Color ROMs in `Games/GBC/`. Existing font, bookmark, theme, and save-state support is inherited from Sonix; this update does not add more ebook formats or emulator systems.
+Sonix Books is under active development. Test firmware is experimental; automated checks are not a substitute for hardware testing. Review each release's validation status before flashing.
 
-The [development notes](BOOKS_DEVELOPMENT.md) describe validation and the next stages. The remaining documentation describes the inherited player and build process; firmware installation instructions apply only once a matching device image has been built and tested.
+- [Releases and test builds](https://github.com/lilblock1/Sonix-Books/releases)
+- [Upstream features](FEATURES.md) (some are inherited and may not have been validated on this fork)
+- [Development notes](BOOKS_DEVELOPMENT.md)
+- [Reading development plan](READING_PLAN.md)
 
----
+Only use a Sonix Books `r1.upt` release intended for the HiBy R1. Charge to at least 50%, back up your SD card, and keep a known-working R1 firmware image before updating. A simulator or device executable is not a flashable firmware image; never rename one to `r1.upt`.
 
+1. Copy the verified `r1.upt` firmware to the root of the microSD card.
+2. On stock firmware, use the local firmware update option. On Sonix Books, use Settings > System > Update firmware > From SD card.
+3. Keep power stable and do not interrupt installation. A successful installation reboots the device.
 
-A replacement player for the **HiBy R3 Pro II** and the **HiBy R1**, written on
-LVGL.
+Channel-enabled builds can check for updates using Settings > System > Update firmware > Via internet. Test prereleases are opt-in. Review release notes before installing.
 
-Everything it can do is in **[FEATURES.md](FEATURES.md)**.
+## Supported device
 
-## Install
+| Device | Support |
+|---|---|
+| **HiBy R1** | Only development and hardware-validation target |
+| HiBy R3 Pro II and all other models | Unsupported by Sonix Books |
 
-1. Download the firmware for your player from the
-   **[latest release](https://github.com/lilblock1/Sonix-Books/releases/latest)**:
-   `r3proii.upt` for the R3 Pro II, `r1.upt` for the R1. **Never the other
-   one**: the update does not check which player it is given.
-2. Charge the player **above 30%**.
-3. Copy the `.upt` file to the **root of the microSD card** and put the card
-   in the player.
-4. Start the update:
-   - **from the stock firmware** - use its firmware update from the microSD
-     card.
-   - **from Sonix Player** - Settings > System > Update firmware > From SD
-     card.
-5. Let it flash: it says "Upgrading...", then "Succeeded", and reboots by
-   itself.
+The source tree retains some multi-device code and technical references from the original Sonix Player. Their presence is not a promise of compatibility or support for any other device. Use the R1 configuration when building or running this fork.
 
-Once Sonix Player is installed, later versions can be installed straight from
-the player: Settings > System > Update firmware > Via internet downloads the
-right file from the latest release by itself.
-
-> **Going back to the stock firmware:** flash the original firmware from
-> HiBy's website the same way.
-
----
-
-## Supported players
-
-One binary runs on both. It reads which player it is on from
-`system-info.json` at startup, and the firmware packer writes a different one
-into each image.
-
-| | HiBy R3 Pro II | HiBy R1 |
+| Build | Binary | Purpose |
 |---|---|---|
-| panel | 480x720 | 480x800 |
-| DAC | two Cirrus Logic CS43198 | one Cirrus Logic CS43131 |
-| headphone outputs | 3.5 mm, 4.4 mm balanced | 3.5 mm |
-| DAC controls | digital filters, DRE, NOS | digital filters, NOS |
-| touch | Goodix gt9xx, open-source driver, five fingers | Hynitron CST8xx, open-source driver, two fingers |
-| charger | MP2731 | the AXP2101 PMIC |
-| kernel | custom 4.4.94, see [hiby-custom-kernel](https://github.com/Jepl4r/hiby-custom-kernel) | the same |
-| double tap to wake | yes | no |
-| buttons | volume on the left flank, playback on the right | all on the right flank, one skip key |
-| firmware image | `r3proii.upt` | `r1.upt` |
-
-Each player only looks for its own image, and never offers the other's: the
-recovery system does not check what it is given.
-
-There are two builds from one tree:
-
-| | binary | runs on |
-|---|---|---|
-| **host** | `sonix_player_host` | your PC, in an SDL window |
-| **target** | `sonix_player` | the device |
+| Host | `sonix_player_host` | Desktop simulator |
+| Target | `sonix_player` | HiBy R1 device executable |
 
 ---
+
+## Developer reference
+
+The technical documentation below retains upstream implementation details, including references to other hardware. They are for source-code reference only, not supported installation instructions for this fork.
 
 ## Building for the host
 
@@ -435,22 +398,11 @@ tools/system-libs/build.sh <extracted stock rootfs> out
 They go in **before** the repack, and the easiest way is through
 the overlay - any other file need to be in the respective folder mirroring the rootfs structure.
 
-### Flashing
+### Flashing (HiBy R1 only)
 
-1. Copy the image for your player to the **root of the microSD card**:
-   `r3proii.upt` for the R3 Pro II, `r1.upt` for the R1. Never the other one.
-2. Insert the SD card into the player.
-3. Start the update:
-   - **from the stock firmware** - use its firmware update from the microSD
-     card.
-   - **from Sonix Player** - Settings > System > Update firmware > From SD
-     card. *Via internet* downloads the right image from the latest release by
-     itself.
-4. Let it flash - it will say "Upgrading..." then "Succeeded" and reboot by itself.
+Follow the [installation instructions above](#releases-and-installation). Only flash verified `r1.upt` images built for the HiBy R1. Do not use the inherited R3 Pro II packer configuration or images for this fork.
 
-> It is recommended to **charge above 30%** first. 
-**Recovery from a failed flash:** If something goes wrong, you can always restore by flashing the original stock firmware from HiBy's website using the same procedure.
-
+Keep a known-working R1 firmware and recovery instructions available. Recovery from a failed flash is not guaranteed.
 
 ## Generated files
 

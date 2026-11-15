@@ -47,6 +47,7 @@ static lv_obj_t *charge_value, *charge_slider;
 static lv_obj_t *auto_off_switch, *auto_off_value, *auto_off_slider, *auto_off_card;
 static lv_obj_t *led_on_switch, *led_off_switch, *led_off_card;
 static lv_obj_t *key_lock_switch;
+static lv_obj_t *adaptive_refresh_switch, *reading_dim_switch, *instant_turn_switch;
 static lv_obj_t *standby_switch, *standby_value, *standby_slider, *standby_card;
 static lv_obj_t *charge_note;
 static lv_obj_t *axp_limit_switch, *axp_current_switch; // the R1's two, instead of the slider
@@ -127,6 +128,9 @@ void powersettings_apply(void) {
 	led_set_idle_off(config_get_bool("power", "led_off_standby", true));
 
 	input_set_key_lock(config_get_bool("power", "lock_keys_screen_off", false));
+	power_set_display_options(config_get_bool("power", "adaptive_refresh", true),
+							  config_get_bool("power", "reading_dim", false),
+							  config_get_bool("power", "instant_reading_turns", false));
 }
 
 static void refresh_labels(void) {
@@ -164,6 +168,9 @@ static void refresh_labels(void) {
 	}
 
 	set_checked(key_lock_switch, config_get_bool("power", "lock_keys_screen_off", false));
+	set_checked(adaptive_refresh_switch, config_get_bool("power", "adaptive_refresh", true));
+	set_checked(reading_dim_switch, config_get_bool("power", "reading_dim", false));
+	set_checked(instant_turn_switch, config_get_bool("power", "instant_reading_turns", false));
 
 	// Standby and its wait, on one card like the automatic power-off below.
 	bool standby = config_get_bool("power", "standby_mem", true);
@@ -274,8 +281,23 @@ static void standby_toggled_cb(lv_event_t *e) {
 	refresh_labels();
 }
 
+static void display_saver_changed_cb(lv_event_t *e) {
+	(void)e;
+	config_set_bool("power", "adaptive_refresh", lv_obj_has_state(adaptive_refresh_switch, LV_STATE_CHECKED));
+	config_set_bool("power", "reading_dim", lv_obj_has_state(reading_dim_switch, LV_STATE_CHECKED));
+	config_set_bool("power", "instant_reading_turns", lv_obj_has_state(instant_turn_switch, LV_STATE_CHECKED));
+	config_save();
+	powersettings_apply();
+	refresh_labels();
+}
+
 void powersettings_init(gui_config_t *cfg) {
 	lv_obj_t *container = settingsrow_page(powersettings_screen, cfg, "power");
+
+	// English fallback labels until the translated power-profile strings land.
+	settingsrow_toggle(container, "Adaptive UI refresh", &adaptive_refresh_switch, display_saver_changed_cb);
+	settingsrow_toggle(container, "Dim reading after 3 min", &reading_dim_switch, display_saver_changed_cb);
+	settingsrow_toggle(container, "Instant reading page turns", &instant_turn_switch, display_saver_changed_cb);
 
 	// Suspend-to-RAM standby: suspends the player a while after the screen goes
 	// off to save battery, and playback resumes on wake. On by default. What it

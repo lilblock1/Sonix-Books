@@ -8,6 +8,8 @@
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/topbar.h"
 #include "src/system/device/nativegame.h"
+#include "src/system/gearboy/gbinput.h"
+#include <stdatomic.h>
 #include "src/system/device/sdpackages.h"
 #include "src/system/device/system.h"
 #include "src/system/device/power.h"
@@ -29,6 +31,10 @@ static uint16_t *pixels,buttons;
 static uint32_t seen;
 static lv_image_dsc_t image;
 static bool held;
+static uint16_t raw_previous;
+static atomic_uint session_generation;
+static gbinput_zone_t zones[16];
+static unsigned zone_count;
 
 static lv_obj_t *make_list(lv_obj_t *screen,const char *title) {
 	lv_obj_add_style(screen,&theme_style_screen,0);
@@ -77,9 +83,22 @@ static void leave_play(lv_event_t *e) {
 	nativegame_stop();
 	switch_screen_return_to(rom_screen);
 }
+static void raw_exit_ui(void *arg) {
+	if ((unsigned)(uintptr_t)arg == atomic_load(&session_generation) && lv_screen_active()==play_screen) leave_play(NULL);
+}
+static void raw_exit(void) { (void)gui_post(raw_exit_ui,(void*)(uintptr_t)atomic_load(&session_generation)); }
+static void raw_keys(uint16_t mask) {
+	uint16_t pressed=mask & (uint16_t)~raw_previous;
+	raw_previous=mask;
+	if(pressed&(1u<<12))nativegame_save();
+	if(pressed&(1u<<13))nativegame_load();
+	nativegame_keys(mask&0x0fff);
+}
 static void unloaded(lv_event_t *e) {
 	(void)e;
 	lv_timer_pause(timer);
+	atomic_fetch_add(&session_generation,1);
+	if(gbinput_active())gbinput_stop();
 	nativegame_stop();
 	nativegame_keys(0);buttons=0;
 	lv_image_set_src(picture,NULL);image.data=NULL;free(pixels);pixels=NULL;
@@ -105,6 +124,10 @@ static lv_obj_t *pad(const char *text,int x,int y,int w,int h,lv_event_cb_t cb,u
 	lv_obj_t *l=lv_label_create(b);lv_label_set_text(l,text);lv_obj_add_style(l,&theme_style_text,0);
 	lv_obj_set_style_text_font(l,&font_ui_20,0);lv_obj_center(l);
 	lv_obj_add_event_cb(b,cb,cb==game_key?LV_EVENT_ALL:LV_EVENT_CLICKED,(void*)data);
+	if(zone_count<16) {
+		uint16_t key=cb==game_key?(uint16_t)data:cb==save_clicked?1u<<12:cb==load_clicked?1u<<13:GBINPUT_KEY_MENU;
+		zones[zone_count++]=(gbinput_zone_t){x,y,w,h,key};
+	}
 	return b;
 }
 static void launch(const char *rom) {
@@ -123,6 +146,9 @@ static void launch(const char *rom) {
 	switch_screen(play_screen);
 	topbar_set_hidden(true);back_btn_force_hidden(true);
 	held=true;power_hold_screen_on(true);
+	raw_previous=0;atomic_fetch_add(&session_generation,1);
+	gbinput_set_glass(config->screen_width,config->screen_height);
+	(void)gbinput_start_for(zones,(int)zone_count,raw_exit,raw_keys);
 	lv_timer_resume(timer);lv_timer_ready(timer);
 }
 static void launch_no_rom(lv_event_t *e) {(void)e;launch(NULL);}
@@ -199,8 +225,8 @@ void gamespage_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_align(status,LV_TEXT_ALIGN_CENTER,0);
 	lv_label_set_long_mode(status,LV_LABEL_LONG_WRAP);
 	lv_obj_align(status,LV_ALIGN_TOP_MID,0,120);
-	// HiBy R1 portrait layout. The current LVGL fallback is single-touch;
-	// existing Gearboy retains its raw multitouch input and controls.
+	// HiBy R1 portrait layout. Existing raw multitouch provider is shared;
+	// the simulator retains the conventional single-pointer buttons.
 	pad("L",12,394,98,54,game_key,1u<<10);pad("R",370,394,98,54,game_key,1u<<11);
 	pad("UP",85,455,72,66,game_key,1u<<4);
 	pad("LEFT",9,525,72,66,game_key,1u<<6);pad("RIGHT",161,525,72,66,game_key,1u<<7);

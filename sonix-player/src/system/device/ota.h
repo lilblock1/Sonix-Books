@@ -62,6 +62,8 @@ typedef struct {
 bool ota_check_start(void);
 // Downloads and installs only selected extras for the installed firmware. No .upt.
 bool ota_extras_start(unsigned mask);
+// GUI thread: only components without a current managed version.
+unsigned ota_extras_missing(unsigned mask);
 
 bool ota_test_channel(void);
 bool ota_set_test_channel(bool enabled);

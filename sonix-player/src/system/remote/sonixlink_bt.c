@@ -214,7 +214,14 @@ static void *worker_func(void *unused) {
 				teardown();
 				printf("sonixlink: Bluetooth service withdrawn\n");
 			}
-			usleep(POLL_MS * 1000);
+			// No polling at all while SonixLink is disabled. If only the
+			// Bluetooth radio is off, retain its existing discovery delay:
+			// changes to that radio are handled independently.
+			if (!sonixlink_get_enabled()) {
+				sonixlink_wait_enabled();
+			} else {
+				usleep(POLL_MS * 1000);
+			}
 			continue;
 		}
 

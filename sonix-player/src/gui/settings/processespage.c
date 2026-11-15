@@ -8,6 +8,7 @@
 #include "src/gui/shell/theme.h"
 #include "src/system/core/lang.h"
 #include "src/system/core/utils.h"
+#include "src/system/device/power.h"
 
 #include <dirent.h>
 #include <stdio.h>
@@ -21,6 +22,11 @@ lv_obj_t *processespage_screen;
 // the RAM card at the top and the process list below it.
 static lv_obj_t *page_container;
 static lv_obj_t *ram_label;
+static lv_obj_t *cpu_label;
+static lv_timer_t *cpu_timer;
+static bool cpu_baseline;
+static unsigned long long cpu_last_total, cpu_last_idle;
+static char cpu_thermal_path[160];
 static lv_obj_t *proc_list; // emptied and refilled on every SCREEN_LOADED
 
 // A process, reduced to what is worth showing.
@@ -49,6 +55,119 @@ static long meminfo_kb(const char *key) {
 	}
 	fclose(f);
 	return val;
+}
+
+// Read only. No governor, clock, voltage, priority or thermal writes.
+// Missing kernel interfaces are normal and must never be treated as zero.
+static bool read_text(const char *path, char *out, size_t size) {
+	FILE *f = fopen(path, "r");
+	if (!f) return false;
+	bool ok = fgets(out, (int)size, f) != NULL;
+	fclose(f);
+	if (ok) {
+		out[strcspn(out, "\r\n")] = 0;
+		ok = out[0] != 0;
+	}
+	if (!ok) out[0] = 0;
+	return ok;
+}
+
+static bool frequency_text(const char *name, char *out, size_t size) {
+	char path[160];
+	const char *roots[] = {"/sys/devices/system/cpu/cpufreq/policy0",
+						   "/sys/devices/system/cpu/cpu0/cpufreq"};
+	for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); ++i) {
+		snprintf(path, sizeof(path), "%s/%s", roots[i], name);
+		if (read_text(path, out, size)) return true;
+	}
+	return false;
+}
+
+static long positive_number(const char *text) {
+	char *end;
+	long n = strtol(text, &end, 10);
+	return end != text && !*end && n > 0 ? n : -1;
+}
+
+static bool cpu_totals(unsigned long long *total, unsigned long long *idle) {
+	char line[256];
+	if (!read_text("/proc/stat", line, sizeof(line)) || strncmp(line, "cpu ", 4)) return false;
+	unsigned long long v[8] = {0};
+	int n = sscanf(line + 4, "%llu %llu %llu %llu %llu %llu %llu %llu",
+				   &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]);
+	if (n < 4) return false;
+	*total = 0;
+	for (int i = 0; i < n; ++i) *total += v[i];
+	*idle = v[3] + v[4];
+	return true;
+}
+
+static void find_cpu_thermal(void) {
+	cpu_thermal_path[0] = 0;
+	for (int i = 0; i < 16; ++i) {
+		char path[160], type[80];
+		snprintf(path, sizeof(path), "/sys/class/thermal/thermal_zone%d/type", i);
+		if (!read_text(path, type, sizeof(type))) continue;
+		// Do not label a battery/board sensor as CPU temperature.
+		if (strcmp(type, "cpu") && strcmp(type, "cpu-thermal") &&
+			strcmp(type, "soc") && strcmp(type, "soc-thermal")) continue;
+		snprintf(cpu_thermal_path, sizeof(cpu_thermal_path), "/sys/class/thermal/thermal_zone%d/temp", i);
+		break;
+	}
+}
+
+static void refresh_cpu(void) {
+	if (!cpu_label) return;
+	char load[32] = "Sampling...", now[48] = "Unavailable";
+	char range[72] = "Unavailable", governor[80] = "Unavailable";
+	char governors[144] = "Unavailable", frequencies[200] = "Unavailable";
+	char thermal[48] = "Unavailable", buf[256];
+	unsigned long long total, idle;
+	if (cpu_totals(&total, &idle)) {
+		if (cpu_baseline && total > cpu_last_total && idle >= cpu_last_idle &&
+			idle - cpu_last_idle <= total - cpu_last_total) {
+			unsigned long long dt = total - cpu_last_total, di = idle - cpu_last_idle;
+			snprintf(load, sizeof(load), "%u%%", (unsigned)((dt - di) * 100 / dt));
+		}
+		cpu_last_total = total;
+		cpu_last_idle = idle;
+		cpu_baseline = true;
+	} else {
+		cpu_baseline = false;
+		snprintf(load, sizeof(load), "Unavailable");
+	}
+	long current = -1, minimum = -1, maximum = -1;
+	if (frequency_text("scaling_cur_freq", buf, sizeof(buf))) current = positive_number(buf);
+	if (current < 0 && frequency_text("cpuinfo_cur_freq", buf, sizeof(buf))) current = positive_number(buf);
+	if (frequency_text("scaling_min_freq", buf, sizeof(buf))) minimum = positive_number(buf);
+	if (frequency_text("scaling_max_freq", buf, sizeof(buf))) maximum = positive_number(buf);
+	if (current > 0) snprintf(now, sizeof(now), "%ld MHz", current / 1000);
+	if (minimum > 0 && maximum >= minimum) snprintf(range, sizeof(range), "%ld - %ld MHz", minimum / 1000, maximum / 1000);
+	if (!frequency_text("scaling_governor", governor, sizeof(governor))) snprintf(governor, sizeof(governor), "Unavailable");
+	if (!frequency_text("scaling_available_governors", governors, sizeof(governors))) snprintf(governors, sizeof(governors), "Unavailable");
+	if (!frequency_text("scaling_available_frequencies", frequencies, sizeof(frequencies))) snprintf(frequencies, sizeof(frequencies), "Unavailable");
+	if (cpu_thermal_path[0] && read_text(cpu_thermal_path, buf, sizeof(buf))) {
+		char *end;
+		long t = strtol(buf, &end, 10);
+		if (end != buf && !*end && t >= -40000 && t <= 150000)
+			snprintf(thermal, sizeof(thermal), "%ld C", t / 1000);
+	}
+	char report[800];
+	snprintf(report, sizeof(report),
+			 "CPU usage: %s\nCurrent frequency: %s\nPolicy range: %s\nGovernor: %s\n"
+			 "Available governors: %s\nAvailable frequencies (kHz): %s\nCPU/SoC temperature: %s\nRead-only; stock clock policy retained",
+			 load, now, range, governor, governors, frequencies, thermal);
+	if (strcmp(lv_label_get_text(cpu_label), report)) lv_label_set_text(cpu_label, report);
+}
+
+static void cpu_timer_cb(lv_timer_t *timer) {
+	if (lv_screen_active() != processespage_screen) {
+		lv_timer_pause(timer);
+		cpu_baseline = false;
+		return;
+	}
+	if (!power_screen_is_on()) { cpu_baseline = false; return; }
+	refresh_cpu();
 }
 
 // The process name (comm), newline stripped. False if the PID is already gone.
@@ -224,13 +343,26 @@ static void rebuild(void) {
 
 static void screen_loaded_cb(lv_event_t *e) {
 	(void)e;
+	cpu_baseline = false;
+	find_cpu_thermal();
+	refresh_cpu();
 	rebuild();
+	if (cpu_timer) { lv_timer_reset(cpu_timer); lv_timer_resume(cpu_timer); }
+}
+
+static void screen_unloaded_cb(lv_event_t *e) {
+	(void)e;
+	if (cpu_timer) lv_timer_pause(cpu_timer);
+	cpu_baseline = false;
+	if (proc_list) lv_obj_clean(proc_list);
 }
 
 // Refresh on demand: the page already redraws on every open, but watching a
 // process grow should not require leaving and re-entering for each new figure.
 static void refresh_clicked_cb(lv_event_t *e) {
 	(void)e;
+	find_cpu_thermal();
+	refresh_cpu();
 	rebuild();
 }
 
@@ -271,6 +403,24 @@ void processespage_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_font(ram_label, &font_ui_22, 0);
 	lv_label_set_text(ram_label, "");
 
+	// CPU diagnostics, sampled only while this screen is visible.
+	lv_obj_t *cpu_card = lv_obj_create(page_container);
+	lv_obj_set_width(cpu_card, lv_pct(100));
+	lv_obj_set_height(cpu_card, LV_SIZE_CONTENT);
+	lv_obj_add_style(cpu_card, &theme_style_card, 0);
+	lv_obj_set_style_radius(cpu_card, 12, 0);
+	lv_obj_set_style_border_width(cpu_card, 0, 0);
+	lv_obj_set_style_shadow_width(cpu_card, 0, 0);
+	lv_obj_set_style_pad_all(cpu_card, 18, 0);
+	lv_obj_set_scrollable(cpu_card, false);
+	cpu_label = lv_label_create(cpu_card);
+	lv_obj_set_width(cpu_label, lv_pct(100));
+	lv_label_set_long_mode(cpu_label, LV_LABEL_LONG_WRAP);
+	lv_obj_set_style_text_font(cpu_label, &font_ui_20, 0);
+	lv_label_set_text(cpu_label, "CPU diagnostics");
+	cpu_timer = lv_timer_create(cpu_timer_cb, 2000, NULL);
+	if (cpu_timer) { lv_timer_pause(cpu_timer); power_pause_in_standby(cpu_timer); }
+
 	// The list heading, then the list itself: a column refilled on every open.
 	lv_obj_t *list_title = lv_label_create(page_container);
 	lv_label_set_text(list_title, tr("processes_running_processes"));
@@ -288,6 +438,7 @@ void processespage_init(gui_config_t *cfg) {
 	lv_obj_set_flex_flow(proc_list, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_scrollable(proc_list, false);
 
-	rebuild();
+	// Do not scan /proc or allocate up to 60 rows during ordinary boot.
 	lv_obj_add_event_cb(processespage_screen, screen_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(processespage_screen, screen_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 }

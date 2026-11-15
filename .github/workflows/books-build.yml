@@ -173,6 +173,11 @@ jobs:
         run: python3 sonix-player/tests/test_test_release.py
       - name: Test firmware chunk verification
         run: python3 sonix-player/tests/test_r1_candidate.py
+      - name: Test power profile safety and low-battery fallback
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. tests/test_power_profile.c -o build_tests/test_power_profile
+          ./build_tests/test_power_profile
       - name: Build the complete Linux simulator
         working-directory: sonix-player
         run: make host -j2

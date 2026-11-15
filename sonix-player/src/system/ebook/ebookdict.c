@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "ebookdict.h"
+#include "src/system/device/sdpackages.h"
 #include "ebooktext.h"
 
 #include <dirent.h>
@@ -45,12 +46,7 @@ static bool valid_id(const char *id) {
 	return true;
 }
 
-void ebookdict_scan(const char *root, ebookdict_catalog_t *out, ebookdict_cancel_t cancel, void *user) {
-	if (!out) return;
-	memset(out, 0, sizeof(*out));
-	char folder[DICT_PATH];
-	if (stopped(cancel, user)) { out->cancelled = true; return; }
-	if (!root_path(root, folder)) { out->unavailable = true; return; }
+static void scan_in(const char *folder, ebookdict_catalog_t *out, ebookdict_cancel_t cancel, void *user) {
 	DIR *dir = opendir(folder);
 	if (!dir) { out->unavailable = true; return; }
 	unsigned visited = 0;
@@ -65,6 +61,9 @@ void ebookdict_scan(const char *root, ebookdict_catalog_t *out, ebookdict_cancel
 		struct stat st;
 		if (n < 0 || (size_t)n >= sizeof(file) || !ordinary(file, &st) || !S_ISREG(st.st_mode) ||
 			st.st_size < HEADER || (uint64_t)st.st_size > EBOOKDICT_MAX_FILE) { out->skipped++; continue; }
+		bool duplicate = false;
+		for (unsigned i = 0; i < out->count; i++) if (!strcmp(out->entries[i].id, de->d_name)) duplicate = true;
+		if (duplicate) continue;
 		ebookdict_entry_t entry;
 		size_t length = strlen(de->d_name);
 		memcpy(entry.id, de->d_name, length + 1);
@@ -79,6 +78,16 @@ void ebookdict_scan(const char *root, ebookdict_catalog_t *out, ebookdict_cancel
 		out->entries[at] = entry;
 	}
 	closedir(dir);
+}
+
+void ebookdict_scan(const char *root, ebookdict_catalog_t *out, ebookdict_cancel_t cancel, void *user) {
+	if (!out) return;
+	memset(out, 0, sizeof(*out));
+	char folder[DICT_PATH]; bool found = false;
+	if (stopped(cancel, user)) { out->cancelled = true; return; }
+	if (root_path(root, folder)) { found = true; scan_in(folder, out, cancel, user); }
+	if (!out->cancelled && sdpackages_path(root, "Dictionaries", folder, sizeof(folder))) { found = true; scan_in(folder, out, cancel, user); }
+	if (!found) out->unavailable = true;
 }
 
 static bool space(uint32_t c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == 0xa0 || c == '_'; }
@@ -165,10 +174,15 @@ void ebookdict_lookup(const char *root, const char *id, const char *query,
 	if (stopped(cancel, user)) { out->status = EBOOKDICT_CANCELLED; return; }
 	out->status = EBOOKDICT_UNAVAILABLE;
 	char folder[DICT_PATH], file_path[DICT_PATH];
-	if (!valid_id(id) || !root_path(root, folder)) return;
-	int n = snprintf(file_path, sizeof(file_path), "%s/%s", folder, id);
-	struct stat st;
-	if (n < 0 || (size_t)n >= sizeof(file_path) || !ordinary(file_path, &st) || !S_ISREG(st.st_mode)) return;
+	if (!valid_id(id)) return;
+	struct stat st; bool found = false;
+	for (unsigned source = 0; source < 2 && !found; source++) {
+		bool has = source ? sdpackages_path(root, "Dictionaries", folder, sizeof(folder)) : root_path(root, folder);
+		if (!has) continue;
+		int n = snprintf(file_path, sizeof(file_path), "%s/%s", folder, id);
+		found = n > 0 && (size_t)n < sizeof(file_path) && ordinary(file_path, &st) && S_ISREG(st.st_mode);
+	}
+	if (!found) return;
 	out->status = EBOOKDICT_BAD_FILE;
 	if (st.st_size < HEADER || (uint64_t)st.st_size > EBOOKDICT_MAX_FILE) return;
 	FILE *file = fopen(file_path, "rb");

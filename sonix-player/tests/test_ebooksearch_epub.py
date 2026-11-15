@@ -32,11 +32,12 @@ def main():
         inflate.write_text('#include "src/system/image/miniz/miniz_tinfl.h"\n#include "src/system/image/miniz/tinfl_impl.inc"\n')
         sources = [root / "tests/test_ebooksearch_epub.c"]
         sources += [root / "src/system/ebook" / (s + ".c") for s in
-                    ("ebook", "ebooksearch", "ebooktext", "epub_zip", "epub_opf", "epub_xhtml", "epub_css", "epub_xml")]
+                    ("ebook", "ebook_native", "ebook_plain", "ebookformats", "ebooksearch", "ebooktext", "epub_zip", "epub_opf", "epub_xhtml", "epub_css", "epub_xml")]
+        sources += [root / "src/system/device/sdpackages_paths.c"]
         sources += [args.arena.resolve() if args.arena else root / "src/system/ebook/epub_arena.c", inflate]
         exe = temp / "search-test.exe"
         subprocess.run(args.cc + ["-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(root)] +
-                       [str(p) for p in sources] + ["-o", str(exe)], check=True, cwd=root)
+                       [str(p) for p in sources] + ["-pthread", "-o", str(exe)], check=True, cwd=root)
         subprocess.run([str(exe), str(book)], check=True)
 
 

@@ -179,7 +179,7 @@ static const char *const EXT_IMAGE[] = {"bmp", "png", "jpg", "jpeg", "gif", "web
 static const char *const EXT_TEXT[] = {"lrc", "txt", "t", "ini", "nfo", NULL};
 static const char *const EXT_FIRMWARE[] = {"upt", NULL};
 static const char *const EXT_GAME[] = {"gb", "gbc", "sav", NULL};
-static const char *const EXT_BOOK[] = {"epub", NULL};
+static const char *const EXT_BOOK[] = {"epub", "txt", "text", "mobi", "azw", "azw3", "prc", "pdf", "xps", "oxps", "fb2", "fbz", "html", "htm", "xhtml", "md", "markdown", "rtf", "docx", "odt", "cbz", "cbr", "cbt", NULL};
 
 static const lv_image_dsc_t *glyph_for(const entry_t *entry) {
 	if (entry->dir) {

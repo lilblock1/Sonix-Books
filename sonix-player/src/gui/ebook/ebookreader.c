@@ -275,6 +275,58 @@ static int32_t block_margin_bottom(const ebook_block_t *b) {
 #define IMAGE_MAX_HEIGHT_NUM 3
 #define IMAGE_MAX_HEIGHT_DEN 4
 
+static lv_obj_t *zoom_veil, *zoom_bounds, *zoom_image;
+static cover_image_t *zoom_pixels;
+static unsigned zoom_scale = 256;
+static void zoom_close(void) {
+	if (zoom_veil) lv_obj_delete(zoom_veil);
+	zoom_veil = zoom_bounds = zoom_image = NULL;
+	if (zoom_pixels) { cover_free(zoom_pixels); free(zoom_pixels); zoom_pixels = NULL; }
+	readingkeys_enter(readingkeys_mode());
+}
+static void zoom_control_cb(lv_event_t *e) {
+	intptr_t action = (intptr_t)lv_event_get_user_data(e);
+	if (!action) { zoom_close(); return; }
+	if (!zoom_pixels) return;
+	if (action < 0 && zoom_scale > 64) zoom_scale /= 2;
+	if (action > 0 && zoom_scale < 512) zoom_scale *= 2;
+	lv_image_set_scale(zoom_image, zoom_scale);
+	lv_obj_set_size(zoom_bounds, (int32_t)(zoom_pixels->dsc.header.w * zoom_scale / 256),
+		(int32_t)(zoom_pixels->dsc.header.h * zoom_scale / 256));
+}
+static void zoom_open_cb(lv_event_t *e) {
+	(void)e;
+	if (!book || !ebook_is_fixed(book) || zoom_veil) return;
+	uint32_t size = 0; void *bytes = ebook_load_image(book, "native-page", &size);
+	zoom_pixels = calloc(1, sizeof(*zoom_pixels));
+	if (!bytes || !zoom_pixels || !cover_load_image_memory(bytes, size, 960, 1280, COVER_FIT_CONTAIN, zoom_pixels)) {
+		free(bytes); if (zoom_pixels) { cover_free(zoom_pixels); free(zoom_pixels); zoom_pixels = NULL; } return;
+	}
+	free(bytes);
+	zoom_veil = lv_obj_create(ebookreader_screen);
+	lv_obj_remove_style_all(zoom_veil);
+	lv_obj_set_size(zoom_veil, g_cfg->screen_width, g_cfg->screen_height);
+	lv_obj_set_style_bg_color(zoom_veil, lv_color_black(), 0); lv_obj_set_style_bg_opa(zoom_veil, LV_OPA_COVER, 0);
+	lv_obj_set_scrollable(zoom_veil, false);
+	lv_obj_t *view = lv_obj_create(zoom_veil); lv_obj_remove_style_all(view);
+	lv_obj_set_size(view, g_cfg->screen_width, g_cfg->screen_height - 44);
+	lv_obj_set_scroll_dir(view, LV_DIR_ALL); lv_obj_set_scrollable(view, true);
+	zoom_bounds = lv_obj_create(view); lv_obj_remove_style_all(zoom_bounds); lv_obj_set_scrollable(zoom_bounds, false);
+	lv_obj_set_size(zoom_bounds, zoom_pixels->dsc.header.w, zoom_pixels->dsc.header.h);
+	zoom_image = lv_image_create(zoom_bounds); lv_image_set_src(zoom_image, &zoom_pixels->dsc);
+	lv_image_set_pivot(zoom_image, 0, 0); lv_obj_set_clickable(zoom_image, false);
+	zoom_scale = 256;
+	const char *labels[] = {"Close", "-", "+"};
+	for (unsigned i = 0; i < 3; i++) {
+		lv_obj_t *button = lv_button_create(zoom_veil);
+		lv_obj_set_size(button, g_cfg->screen_width / 3 - 4, 40);
+		lv_obj_set_pos(button, i * g_cfg->screen_width / 3 + 2, g_cfg->screen_height - 42);
+		lv_obj_t *label = lv_label_create(button); lv_label_set_text(label, labels[i]); lv_obj_center(label);
+		lv_obj_add_event_cb(button, zoom_control_cb, LV_EVENT_CLICKED, (void *)(intptr_t)(i == 0 ? 0 : i == 1 ? -1 : 1));
+	}
+	lv_obj_move_foreground(zoom_veil);
+}
+
 static void image_deleted_cb(lv_event_t *e) {
 	cover_image_t *img = lv_event_get_user_data(e);
 	if (img) {
@@ -309,7 +361,8 @@ static lv_obj_t *build_image(lv_obj_t *parent, const ebook_block_t *b, int width
 		free(bytes);
 		return NULL;
 	}
-	int box_h = (int)g_cfg->screen_height * IMAGE_MAX_HEIGHT_NUM / IMAGE_MAX_HEIGHT_DEN;
+	int box_h = ebook_is_fixed(book) ? (int)g_cfg->screen_height - bar_space() - opt_margin * 2 :
+		(int)g_cfg->screen_height * IMAGE_MAX_HEIGHT_NUM / IMAGE_MAX_HEIGHT_DEN;
 	// CONTAIN and not COVER: an illustration cropped to fill a box is an
 	// illustration with its edges cut off, which for a diagram or a map is the
 	// part that mattered.
@@ -323,6 +376,10 @@ static lv_obj_t *build_image(lv_obj_t *parent, const ebook_block_t *b, int width
 	lv_obj_t *obj = lv_image_create(parent);
 	lv_image_set_src(obj, &img->dsc);
 	lv_obj_set_clickable(obj, false);
+	if (ebook_is_fixed(book)) {
+		lv_obj_set_clickable(obj, true); lv_obj_add_flag(obj, LV_OBJ_FLAG_EVENT_BUBBLE);
+		lv_obj_add_event_cb(obj, zoom_open_cb, LV_EVENT_LONG_PRESSED, NULL);
+	}
 	lv_obj_set_style_margin_top(obj, block_margin_top(b), 0);
 	lv_obj_set_style_margin_bottom(obj, block_margin_bottom(b), 0);
 	lv_obj_add_event_cb(obj, image_deleted_cb, LV_EVENT_DELETE, img);
@@ -1844,6 +1901,7 @@ static bool in_the_centre(const lv_point_t *p) {
 }
 
 static void page_pressed_cb(lv_event_t *e) {
+	if (zoom_veil) return;
 	static lv_point_t start;
 	static uint32_t pressed_at;
 	static bool tracking;
@@ -2058,6 +2116,7 @@ bool ebookreader_key(gui_key_t key) {
 	if (!book || lv_screen_active() != ebookreader_screen) {
 		return false;
 	}
+	if (zoom_veil) { if (key == GUI_KEY_PLAY_PAUSE) zoom_close(); return true; }
 	if (ebookfind_key(key)) return true;
 	if (ebookdictionary_key(key)) return true;
 	if (ebookmarkedit_active(ebookreader_screen)) {
@@ -2154,6 +2213,7 @@ static void close_book_cb(lv_event_t *e) {
 
 static void find_restore(ebook_position_t position, bool picked) {
 	if (!book || lv_screen_active() != ebookreader_screen) return;
+	if (picked && ebook_is_fixed(book)) position.block = position.offset = 0;
 	bool restore_origin = !picked;
 	bool opened = load_chapter(position.spine, position.block, position.offset);
 	if (!opened && picked) {
@@ -2877,6 +2937,7 @@ static void reader_loaded_cb(lv_event_t *e) {
 }
 
 static void reader_unloaded_cb(lv_event_t *e) {
+	zoom_close();
 	(void)e;
 	readingkeys_leave();
 	ebookfind_abort();
@@ -2942,7 +3003,7 @@ void ebookreader_open(const char *path) {
 	book = ebook_open(path);
 	if (!book) {
 		want_position = false; // it was for this open and this open is not happening
-		gui_notify_popup("ebookreader_open_failed");
+		gui_notify_popup(ebook_last_error());
 		return;
 	}
 
@@ -3035,6 +3096,7 @@ static lv_obj_t *make_page_box(gui_config_t *cfg) {
 
 void ebookreader_init(gui_config_t *cfg) {
 	g_cfg = cfg;
+	ebook_set_sd_root(cfg->sd_root_path);
 
 	ebookreader_screen = lv_obj_create(NULL);
 	lv_obj_remove_style_all(ebookreader_screen);

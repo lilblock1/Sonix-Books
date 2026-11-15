@@ -5,6 +5,9 @@
 #include "src/system/device/ota_policy.h"
 
 int main(void) {
+	assert(ota_policy_package("lilblock1/Sonix-Books", "v0.3.0.1-test", "https://github.com/lilblock1/Sonix-Books/releases/download/v0.3.0.1-test/Sonix-Books-SD-Packages.spk", 100));
+	assert(!ota_policy_package("lilblock1/Sonix-Books", "v0.3.0.1-test", "https://github.com/lilblock1/Sonix-Books/releases/download/v0.3.0.2-test/Sonix-Books-SD-Packages.spk", 100));
+	assert(!ota_policy_package("lilblock1/Sonix-Books", "v0.3.0.1-test", "https://example.com/package.spk", 100));
 	char digest[80] = "sha256:";
 	memset(digest + 7, 'a', 64);
 	digest[71] = '\0';

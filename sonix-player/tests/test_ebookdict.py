@@ -101,7 +101,7 @@ def integration():
         build(entries, dictionary)
         binary = root / "test_dictionary"
         subprocess.run([os.environ.get("CC", "gcc"), "-std=c11", "-Wall", "-Wextra", "-Werror", "-I.",
-                        "tests/test_ebookdict.c", "src/system/ebook/ebookdict.c", "src/system/ebook/ebooktext.c",
+                        "src/system/device/sdpackages_paths.c", "tests/test_ebookdict.c", "src/system/ebook/ebookdict.c", "src/system/ebook/ebooktext.c",
                         "-o", str(binary)], cwd=ROOT, check=True)
         subprocess.run([str(binary), str(root)], check=True)
 

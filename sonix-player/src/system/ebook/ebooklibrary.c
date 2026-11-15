@@ -27,8 +27,7 @@ static bool ordinary_stat(const char *path, struct stat *st) {
 }
 
 static bool epub_name(const char *name) {
-	size_t n = strlen(name);
-	return n > 5 && strcasecmp(name + n - 5, ".epub") == 0;
+	return ebook_supported(name);
 }
 
 static void copy_text(char *out, size_t size, const char *text) {
@@ -155,6 +154,7 @@ static void metadata(ebooklibrary_entry_t *entry, const struct stat *st, const c
 			}
 		}
 	}
+	if (ebook_format(entry->path) != EBOOK_FORMAT_EPUB) return;
 	ebook_t *book = ebook_open(entry->path);
 	if (!book) return; /* Keep filename; retry a damaged/transiently unreadable file next time. */
 	if (ebook_title(book)[0]) copy_text(entry->title, sizeof(entry->title), ebook_title(book));
@@ -228,8 +228,8 @@ static void walk(scan_t *s, const char *folder, unsigned depth) {
 				entry.recent_rank = s->rank(entry.path, s->user);
 				if (entry.recent_rank < 0) continue;
 			}
-			size_t len = strlen(entry.title);
-			if (len > 5 && epub_name(entry.title)) entry.title[len - 5] = 0;
+			char *extension = strrchr(entry.title, '.');
+			if (extension) *extension = 0;
 			metadata(&entry, &st, s->cache_dir);
 			if (stopped(s)) break;
 			if (contains(entry.title, s->query) || contains(entry.author, s->query) || contains(de->d_name, s->query))

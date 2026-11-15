@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,7 @@
 #include "src/system/core/utils.h"
 #include "src/system/device/firmware.h"
 #include "src/system/device/ota_policy.h"
+#include "src/system/device/sdpackages.h"
 #include "src/system/device/sysinfo.h"
 #include "src/system/device/system.h"
 #include "src/system/net/http.h"
@@ -177,10 +179,7 @@ static void trim_partial_utf8(char *s) {
 }
 
 // The asset named "<stem>.upt" in release `rel`, -1 when there is none.
-static int find_asset(const json_doc_t *doc, int rel) {
-	char wanted[80];
-	snprintf(wanted, sizeof(wanted), "%s.upt", stem);
-
+static int find_named_asset(const json_doc_t *doc, int rel, const char *wanted) {
 	int assets = json_get(doc, rel, "assets");
 	int count = json_len(doc, assets);
 	for (int i = 0; i < count; i++) {
@@ -193,6 +192,11 @@ static int find_asset(const json_doc_t *doc, int rel) {
 		}
 	}
 	return -1;
+}
+
+static int find_asset(const json_doc_t *doc, int rel) {
+	char wanted[80]; snprintf(wanted, sizeof(wanted), "%s.upt", stem);
+	return find_named_asset(doc, rel, wanted);
 }
 
 static ota_result_t pick_release(const json_doc_t *doc) {
@@ -209,6 +213,7 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 	long best[VERSION_PARTS];
 	memcpy(best, installed, sizeof(best));
 	int best_rel = -1, best_asset = -1;
+	int same_rel = -1, same_asset = -1;
 
 	int count = json_len(doc, root);
 	for (int i = 0; i < count; i++) {
@@ -219,6 +224,10 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 			!ota_policy_release(checking_test, json_obj_bool(doc, rel, "draft", true),
 				json_obj_bool(doc, rel, "prerelease", true), tag)) {
 			continue;
+		}
+		if (ota_policy_version_cmp(version, installed) == 0 && find_named_asset(doc, rel, SDPACKAGES_ASSET) >= 0) {
+			char active[SDPACKAGES_VERSION];
+			if (!sdpackages_active(storage_sd_root(), active) || strcmp(active, tag)) { same_rel = rel; same_asset = find_asset(doc, rel); }
 		}
 		if (ota_policy_version_cmp(version, best) <= 0) {
 			continue;
@@ -234,11 +243,13 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 	}
 
 	if (best_rel < 0) {
-		return OTA_UP_TO_DATE;
+		if (same_rel < 0 || same_asset < 0) return OTA_UP_TO_DATE;
+		best_rel = same_rel; best_asset = same_asset;
 	}
 
 	memset(&release, 0, sizeof(release));
 	release.notes = "";
+	release.packages_only = ota_policy_version_cmp(best, installed) == 0;
 	release.test_build = json_obj_bool(doc, best_rel, "prerelease", true);
 	free(notes_text);
 	notes_text = NULL;
@@ -272,6 +283,14 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 
 	if (!ota_policy_asset(repo, stem, release.url, release.size)) {
 		return OTA_CHECK_FAILED;
+	}
+	int package = find_named_asset(doc, best_rel, SDPACKAGES_ASSET);
+	if (package >= 0) {
+		release.packages_size = json_obj_long(doc, package, "size", 0);
+		json_obj_str(doc, package, "browser_download_url", release.packages_url, sizeof(release.packages_url));
+		if (!json_obj_str(doc, package, "digest", digest, sizeof(digest)) || !ota_policy_digest(digest) ||
+			!ota_policy_package(repo, release.tag, release.packages_url, release.packages_size)) return OTA_CHECK_FAILED;
+		memcpy(release.packages_sha256, digest + 7, 65);
 	}
 	release_valid = true;
 	printf("ota: %s (%s) available, %ld bytes, sha256 %s\n", release.tag, release.name, release.size,
@@ -371,123 +390,93 @@ static void remove_old_files(const char *root) {
 	closedir(dir);
 }
 
+static ota_result_t download_asset(const char *url, long size, const char *expected, const char *part, long base) {
+	int fd = open(part, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+	if (fd < 0) return OTA_DOWNLOAD_FAILED;
+	FILE *f = fdopen(fd, "wb");
+	if (!f) { close(fd); unlink(part); return OTA_DOWNLOAD_FAILED; }
+	http_stream_t stream; memset(&stream, 0, sizeof(stream)); stream.fd = -1;
+	if (!http_stream_open(&stream, url, DOWNLOAD_TIMEOUT_SECS)) {
+		fclose(f); unlink(part); return cancelled() ? OTA_CANCELLED : OTA_DOWNLOAD_FAILED;
+	}
+	pthread_mutex_lock(&lock); active_stream = &stream; pthread_mutex_unlock(&lock);
+	ota_result_t r = OTA_OK;
+	if (stream.content_length > 0 && stream.content_length != size) r = OTA_CORRUPT;
+	sha256_ctx sha; sha256_init(&sha);
+	long done = 0;
+	while (r == OTA_OK && done < size && !cancelled()) {
+		long want = size - done;
+		int n = http_stream_read(&stream, chunk, want < (long)sizeof(chunk) ? (int)want : (int)sizeof(chunk));
+		if (n <= 0 || fwrite(chunk, 1, (size_t)n, f) != (size_t)n) { r = OTA_DOWNLOAD_FAILED; break; }
+		sha256_update(&sha, chunk, (size_t)n); done += n;
+		pthread_mutex_lock(&lock); progress_done = base + done; pthread_mutex_unlock(&lock);
+	}
+	pthread_mutex_lock(&lock); active_stream = NULL; pthread_mutex_unlock(&lock);
+	http_stream_close(&stream);
+	if (fflush(f) || fsync(fileno(f))) r = OTA_DOWNLOAD_FAILED;
+	if (fclose(f)) r = OTA_DOWNLOAD_FAILED;
+	if (cancelled()) r = OTA_CANCELLED;
+	if (r == OTA_OK) {
+		char digest[65]; sha256_final_hex(&sha, digest);
+		if (done != size || strcasecmp(digest, expected)) r = OTA_CORRUPT;
+	}
+	if (r != OTA_OK) unlink(part);
+	return r;
+}
+static bool package_cancel(void *user) { (void)user; return cancelled(); }
+static void package_progress(uint64_t done, uint64_t total, void *user) {
+	(void)user;
+	long downloads = (release.packages_only ? 0 : release.size) + release.packages_size;
+	pthread_mutex_lock(&lock);
+	progress_done = downloads + (long)done; progress_total = downloads + (long)total;
+	pthread_mutex_unlock(&lock);
+}
 static ota_result_t do_download(void) {
-	// Check again at the boundary that writes the card, not only while parsing
-	// the release list. A missing digest must never take the old size-only path.
 	char digest[80];
 	snprintf(digest, sizeof(digest), "sha256:%s", release.sha256);
-	if (!ota_policy_digest(digest) || !ota_policy_asset(repo, stem, release.url, release.size)) {
-		return OTA_CHECK_FAILED;
+	if (!ota_policy_digest(digest) || !ota_policy_asset(repo, stem, release.url, release.size)) return OTA_CHECK_FAILED;
+	if (release.packages_size) {
+		snprintf(digest, sizeof(digest), "sha256:%s", release.packages_sha256);
+		if (!ota_policy_digest(digest) || !ota_policy_package(repo, release.tag, release.packages_url, release.packages_size)) return OTA_CHECK_FAILED;
 	}
 	const char *root = storage_sd_root();
-	if (!root || !*root) {
-		return OTA_NO_CARD;
-	}
-
+	if (!root || !root[0]) return OTA_NO_CARD;
 	struct statvfs vfs;
-	if (statvfs(root, &vfs) == 0) {
-		unsigned long long unit = vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize;
-		unsigned long long avail = (unsigned long long)vfs.f_bavail * unit;
-		if (avail < (unsigned long long)release.size + SPACE_MARGIN) {
-			return OTA_NO_SPACE;
-		}
-	}
-
-	char final_path[600], part_path[620];
-	snprintf(final_path, sizeof(final_path), "%s/%s.upt", root, stem);
-	snprintf(part_path, sizeof(part_path), "%s.part", final_path);
-
-	FILE *f = fopen(part_path, "wb");
-	if (!f) {
-		printf("ota: cannot create %s\n", part_path);
-		return OTA_DOWNLOAD_FAILED;
-	}
-
-	http_stream_t stream;
-	memset(&stream, 0, sizeof(stream));
-	stream.fd = -1;
-	printf("ota: downloading %s\n", release.url);
-	if (!http_stream_open(&stream, release.url, DOWNLOAD_TIMEOUT_SECS)) {
-		const char *why = http_last_error();
-		printf("ota: download not started%s%s\n", why ? ": " : "", why ? why : "");
-		fclose(f);
-		unlink(part_path);
-		return cancelled() ? OTA_CANCELLED : OTA_DOWNLOAD_FAILED;
-	}
-
-	pthread_mutex_lock(&lock);
-	active_stream = &stream;
-	bool stop = cancel_requested;
-	pthread_mutex_unlock(&lock);
-
+	if (statvfs(root, &vfs)) return OTA_NO_CARD;
+	uint64_t free_bytes = (uint64_t)vfs.f_bavail * (vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize);
+	long firmware_bytes = release.packages_only ? 0 : release.size;
+	// Installer checks expanded-space requirements separately, before staging.
+	if (free_bytes < (uint64_t)firmware_bytes + (uint64_t)release.packages_size + SPACE_MARGIN) return OTA_NO_SPACE;
+	char final[600], part[620], package[1000];
+	int n = snprintf(final, sizeof(final), "%s/%s.upt", root, stem);
+	if (n < 0 || (size_t)n >= sizeof(final)) return OTA_DOWNLOAD_FAILED;
+	n = snprintf(part, sizeof(part), "%s.part", final);
+	if (n < 0 || (size_t)n >= sizeof(part)) return OTA_DOWNLOAD_FAILED;
+	n = snprintf(package, sizeof(package), "%s/.sonix-SD-Packages.part", root);
+	if (n < 0 || (size_t)n >= sizeof(package)) return OTA_DOWNLOAD_FAILED;
 	ota_result_t r = OTA_OK;
-	if (stream.content_length > 0 && stream.content_length != release.size) {
-		printf("ota: the server sends %ld bytes, the release says %ld\n", stream.content_length, release.size);
-		r = OTA_CORRUPT;
-	}
-
-	sha256_ctx sha;
-	sha256_init(&sha);
-	long done = 0;
-	while (r == OTA_OK && !stop && done < release.size) {
-		long want = release.size - done;
-		int n = http_stream_read(&stream, chunk, want < (long)sizeof(chunk) ? (int)want : (int)sizeof(chunk));
-		if (n <= 0) {
-			printf("ota: the connection ended at %ld of %ld bytes\n", done, release.size);
-			r = OTA_DOWNLOAD_FAILED;
-			break;
+	if (firmware_bytes) r = download_asset(release.url, release.size, release.sha256, part, 0);
+	if (r == OTA_OK && release.packages_size) {
+		r = download_asset(release.packages_url, release.packages_size, release.packages_sha256, package, firmware_bytes);
+		if (r == OTA_OK) {
+			sdpackages_result_t installed = sdpackages_install(root, package, release.tag, release.packages_sha256,
+				package_cancel, package_progress, NULL);
+			r = installed == SDPACKAGES_OK ? OTA_OK : installed == SDPACKAGES_CANCELLED ? OTA_CANCELLED :
+				installed == SDPACKAGES_NO_SPACE ? OTA_NO_SPACE :
+				installed == SDPACKAGES_INVALID || installed == SDPACKAGES_CORRUPT ? OTA_CORRUPT : OTA_DOWNLOAD_FAILED;
 		}
-		if (fwrite(chunk, 1, (size_t)n, f) != (size_t)n) {
-			printf("ota: write to the card failed at %ld bytes\n", done);
-			r = OTA_DOWNLOAD_FAILED;
-			break;
+		unlink(package);
+	}
+	if (r == OTA_OK && cancelled()) r = OTA_CANCELLED;
+	if (firmware_bytes) {
+		if (r == OTA_OK) {
+			remove_old_files(root);
+			if (rename(part, final)) r = OTA_DOWNLOAD_FAILED;
 		}
-		sha256_update(&sha, chunk, (size_t)n);
-		done += n;
-
-		pthread_mutex_lock(&lock);
-		progress_done = done;
-		stop = cancel_requested;
-		pthread_mutex_unlock(&lock);
+		if (r != OTA_OK) unlink(part);
 	}
-
-	pthread_mutex_lock(&lock);
-	active_stream = NULL;
-	pthread_mutex_unlock(&lock);
-	http_stream_close(&stream);
-
-	if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
-		r = r == OTA_OK ? OTA_DOWNLOAD_FAILED : r;
-	}
-	if (fclose(f) != 0 && r == OTA_OK) {
-		r = OTA_DOWNLOAD_FAILED;
-	}
-
-	if (stop) {
-		r = OTA_CANCELLED;
-	}
-	if (r == OTA_OK) {
-		char hex[SHA256_HEX_LEN];
-		sha256_final_hex(&sha, hex);
-		if (strcasecmp(hex, release.sha256) != 0) {
-			printf("ota: sha256 %s, the release says %s\n", hex, release.sha256);
-			r = OTA_CORRUPT;
-		}
-	}
-	if (r != OTA_OK) {
-		unlink(part_path);
-		return r;
-	}
-
-	remove_old_files(root);
-	if (rename(part_path, final_path) != 0) {
-		printf("ota: cannot rename %s\n", part_path);
-		unlink(part_path);
-		return OTA_DOWNLOAD_FAILED;
-	}
-	sync();
-	printf("ota: %s ready (%ld bytes%s)\n", final_path, done, release.sha256[0] ? ", sha256 matches" : "");
-	return OTA_OK;
+	if (r == OTA_OK) sync();
+	return r;
 }
 
 static void *download_thread(void *unused) {
@@ -503,7 +492,7 @@ bool ota_download_start(void) {
 	}
 
 	pthread_mutex_lock(&lock);
-	progress_total = release.size;
+	progress_total = (release.packages_only ? 0 : release.size) + release.packages_size;
 	pthread_mutex_unlock(&lock);
 
 	pthread_t thread;

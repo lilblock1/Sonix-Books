@@ -3,6 +3,9 @@ on:
   workflow_call:
   push:
     branches: ['codex/common-book-formats']
+    paths:
+      - 'sonix-player/tools/native-reader/**'
+      - '.github/workflows/native-readers.yml'
   workflow_dispatch:
 permissions:
   contents: read

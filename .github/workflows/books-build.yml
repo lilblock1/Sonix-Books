@@ -104,7 +104,7 @@ jobs:
         working-directory: sonix-player
         run: |
           gcc -std=c11 -Wall -Wextra -Werror -I. \
-            tests/test_ebooklibrary.c src/system/ebook/ebooklibrary.c src/system/ebook/ebooktext.c \
+            tests/test_ebooklibrary.c src/system/ebook/ebooklibrary.c src/system/ebook/ebooktext.c src/system/ebook/ebookformats.c \
             -o build_tests/test_ebooklibrary
           fixture=$(mktemp -d)
           trap 'rm -rf -- "$fixture"' EXIT
@@ -143,7 +143,7 @@ jobs:
         run: |
           gcc -std=c11 -Wall -Wextra -Werror -DHOST_BUILD=1 -Itests/font_stubs -I. \
             tests/test_ebookfonts.c src/gui/ebook/ebookfonts.c \
-            src/system/ebook/ebookfontlist.c src/system/core/config.c \
+            src/system/ebook/ebookfontlist.c src/system/device/sdpackages_paths.c src/system/core/config.c \
             -o build_tests/test_ebookfonts
           fixture=$(mktemp -d)
           trap 'rm -rf -- "$fixture"' EXIT
@@ -153,11 +153,15 @@ jobs:
         run: python3 sonix-player/tests/test_font_pack.py
       - name: Check language resources and fork update destination
         run: python3 sonix-player/tests/check_resources.py
+      - name: Test native TXT decoding and section boundaries
+        run: python3 sonix-player/tests/test_ebookformats.py
+      - name: Test atomic SD package updates
+        run: python3 sonix-player/tests/test_sdpackages.py
       - name: Test Wi-Fi update policy
         working-directory: sonix-player
         run: |
           gcc -std=c11 -Wall -Wextra -Werror -I. tests/test_ota_policy.c \
-            src/system/device/ota_policy.c -o build_tests/test_ota_policy
+            src/system/device/ota_policy.c src/system/device/sdpackages_paths.c -o build_tests/test_ota_policy
           ./build_tests/test_ota_policy
       - name: Test verified test-release publication policy
         run: python3 sonix-player/tests/test_test_release.py

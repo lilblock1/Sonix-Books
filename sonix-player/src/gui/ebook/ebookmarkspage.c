@@ -292,7 +292,8 @@ static bool collect_marked_book(const char *path, void *unused) {
 		snprintf(entry->file, sizeof(entry->file), "%s", path);
 		const char *base = strrchr(path, '/');
 		base = base ? base + 1 : path;
-		snprintf(entry->name, sizeof(entry->name), "%.*s", (int)strlen(base) - 5, base);
+		const char *extension = strrchr(base, '.');
+		snprintf(entry->name, sizeof(entry->name), "%.*s", extension ? (int)(extension - base) : (int)strlen(base), base);
 		entry->count = marks;
 	}
 	return book_count == BOOKS_MAX;

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "ebookfontlist.h"
+#include "src/system/device/sdpackages.h"
 
 #include <dirent.h>
 #include <stdint.h>
@@ -75,12 +76,11 @@ static bool valid_file(const char *path) {
 	return ok;
 }
 
-bool ebookfontlist_resolve(const char *sd_root, const char *id, unsigned style, char *out, size_t size) {
+static bool resolve_in(const char *root, const char *id, unsigned style, char *out, size_t size) {
 	if (!out || !size) return false;
 	out[0] = 0;
 	if (!ebookfontlist_valid_id(id) || style > 3) return false;
-	char root[EBOOKFONTLIST_PATH], candidate[EBOOKFONTLIST_ID];
-	if (!root_path(sd_root, root, sizeof(root))) return false;
+	char candidate[EBOOKFONTLIST_ID];
 	const char *slash = strchr(id, '/');
 	if (slash) {
 		int n = snprintf(out, size, "%s/%.*s", root, (int)(slash - id), id);
@@ -103,6 +103,14 @@ bool ebookfontlist_resolve(const char *sd_root, const char *id, unsigned style, 
 	return false;
 }
 
+bool ebookfontlist_resolve(const char *sd_root, const char *id, unsigned style, char *out, size_t size) {
+	char folder[EBOOKFONTLIST_PATH];
+	if (root_path(sd_root, folder, sizeof(folder)) && resolve_in(folder, id, style, out, size)) return true;
+	if (sdpackages_path(sd_root, "Fonts", folder, sizeof(folder)) && resolve_in(folder, id, style, out, size)) return true;
+	if (out && size) out[0] = 0;
+	return false;
+}
+
 void ebookfontlist_name(const char *id, char *out, size_t size) {
 	if (!out || !size) return;
 	if (!id || !id[0]) { snprintf(out, size, "Default"); return; }
@@ -115,6 +123,7 @@ void ebookfontlist_name(const char *id, char *out, size_t size) {
 }
 
 static void add(ebookfontlist_t *out, const char *root, const char *id) {
+	for (unsigned i = 0; i < (unsigned)out->count; i++) if (!strcmp(out->entries[i].id, id)) return;
 	char resolved[EBOOKFONTLIST_PATH];
 	if (!ebookfontlist_resolve(root, id, 0, resolved, sizeof(resolved))) { out->skipped++; return; }
 	ebookfontlist_entry_t entry;
@@ -130,11 +139,7 @@ static void add(ebookfontlist_t *out, const char *root, const char *id) {
 	out->entries[at] = entry;
 }
 
-void ebookfontlist_scan(const char *sd_root, ebookfontlist_t *out) {
-	if (!out) return;
-	memset(out, 0, sizeof(*out));
-	char root[EBOOKFONTLIST_PATH];
-	if (!root_path(sd_root, root, sizeof(root))) { out->unavailable = true; return; }
+static void scan_in(const char *sd_root, const char *root, ebookfontlist_t *out) {
 	DIR *dir = opendir(root);
 	if (!dir) { out->unavailable = true; return; }
 	struct dirent *de;
@@ -159,4 +164,13 @@ void ebookfontlist_scan(const char *sd_root, ebookfontlist_t *out) {
 		} else if (extension(de->d_name)) add(out, sd_root, de->d_name);
 	}
 	closedir(dir);
+}
+
+void ebookfontlist_scan(const char *sd_root, ebookfontlist_t *out) {
+	if (!out) return;
+	memset(out, 0, sizeof(*out));
+	char folder[EBOOKFONTLIST_PATH]; bool found = false;
+	if (root_path(sd_root, folder, sizeof(folder))) { found = true; scan_in(sd_root, folder, out); }
+	if (sdpackages_path(sd_root, "Fonts", folder, sizeof(folder))) { found = true; scan_in(sd_root, folder, out); }
+	if (!found) out->unavailable = true;
 }

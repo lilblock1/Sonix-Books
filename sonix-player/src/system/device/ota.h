@@ -51,6 +51,9 @@ typedef struct {
 	long size;			// bytes
 	char url[512];		// browser_download_url of the asset
 	char sha256[65];	// required: releases without GitHub's asset digest are refused
+	bool packages_only;
+	long packages_size;
+	char packages_url[512], packages_sha256[65];
 } ota_release_t;
 
 // Starts looking for a release. False when a check or a download is already

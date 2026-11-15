@@ -36,6 +36,14 @@ struct ebook {
 	epub_arena_t book_arena;
 	epub_arena_t chapter_arena;
 	epub_zip_t zip;
+	ebook_format_t format;
+	bool native_backend, fixed_layout;
+	FILE *text_file;
+	uint32_t text_start, text_size;
+	uint32_t *text_offsets;
+	unsigned text_encoding;
+	unsigned char *native_image;
+	uint32_t native_image_size;
 
 	char *path;	 // the .epub on the card
 	char *title;

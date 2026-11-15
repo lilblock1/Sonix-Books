@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 
+bool ota_policy_package(const char *repo, const char *tag, const char *url, long size);
+
 // The GitHub asset digest is mandatory. This is integrity verification against
 // the configured GitHub release, not a signature or a hardware-compatibility proof.
 bool ota_policy_digest(const char *digest);

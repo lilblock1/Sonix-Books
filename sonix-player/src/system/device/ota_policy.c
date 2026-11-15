@@ -4,6 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sdpackages.h"
+
+bool ota_policy_package(const char *repo, const char *tag, const char *url, long size) {
+	if (!repo || !repo[0] || !sdpackages_valid_version(tag) || !url || size <= 0 || (unsigned long)size > SDPACKAGES_MAX_BYTES) return false;
+	char expected[512];
+	int n = snprintf(expected, sizeof(expected), "https://github.com/%s/releases/download/%s/%s", repo, tag, SDPACKAGES_ASSET);
+	return n > 0 && (size_t)n < sizeof(expected) && !strcmp(url, expected);
+}
 
 bool ota_policy_digest(const char *digest) {
 	if (!digest || strlen(digest) != 71 || strncmp(digest, "sha256:", 7) != 0) {

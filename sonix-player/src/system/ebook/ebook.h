@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 // ---------------------------------------------------------------------------
-// An EPUB, opened one chapter at a time
+// A book, opened one chapter or native page at a time
 //
 // The whole of this subsystem is built around one promise: closing a book gives
 // its memory back to the kernel, not to the allocator. Everything a book owns
@@ -25,10 +25,23 @@
 // What is here: EPUB 2 and 3 reflowable books, paragraphs, headings, emphasis,
 // lists, block quotes, images, as much of the stylesheet as changes what is on
 // screen (see epub_css.h), the table of contents, and the reading position.
-// What is not, on purpose: embedded fonts, JavaScript, fixed layout, DRM.
+// TXT is decoded in bounded sections. Optional SD-card helpers supply native
+// documents and fixed pages; see COMMON_BOOK_FORMATS.md. DRM and JavaScript
+// are not supported.
 // ---------------------------------------------------------------------------
 
 typedef struct ebook ebook_t;
+typedef enum {
+	EBOOK_FORMAT_UNSUPPORTED, EBOOK_FORMAT_EPUB, EBOOK_FORMAT_TEXT,
+	EBOOK_FORMAT_KINDLE, EBOOK_FORMAT_NATIVE
+} ebook_format_t;
+ebook_format_t ebook_format(const char *path);
+bool ebook_supported(const char *path);
+bool ebook_is_fixed(const ebook_t *book);
+// Set once on the UI thread before library/reader workers are started.
+void ebook_set_sd_root(const char *root);
+// A useful failure message for the most recent open on this thread.
+const char *ebook_last_error(void);
 
 // How a block of text is meant to look. One byte, because a chapter has
 // thousands of them.
@@ -155,6 +168,9 @@ void *ebook_peek_cover(const char *path, uint32_t *size_out, char *title, size_t
 // chapter cannot be read; the previous one is gone either way, because holding
 // it would defeat the point.
 bool ebook_open_chapter(ebook_t *book, uint32_t spine_index);
+// Fixed-layout searches extract text without rasterizing pages. Search hits
+// in such books identify a page; the visual reader opens that original page.
+bool ebook_open_search_chapter(ebook_t *book, uint32_t spine_index);
 
 // Unloads the chapter and unmaps its arena. Idempotent.
 void ebook_close_chapter(ebook_t *book);

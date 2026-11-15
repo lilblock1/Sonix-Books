@@ -96,7 +96,7 @@ void ebooksearch_run(const char *path, const char *query, ebooksearch_result_t *
 		chapter_bytes += weight;
 		if (progress) progress(chapter + 1, out->chapters_total, user);
 		out->chapters_scanned++;
-		if (!ebook_open_chapter(book, chapter)) { out->unreadable++; continue; }
+		if (!ebook_open_search_chapter(book, chapter)) { out->unreadable++; continue; }
 		const char *text = ebook_chapter_text(book);
 		for (uint32_t b = 0; b < ebook_block_count(book); b++) {
 			if (cancelled(out, cancel, user)) goto done;

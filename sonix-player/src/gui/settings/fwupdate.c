@@ -530,12 +530,15 @@ static void show_release(void) {
 	const ota_release_t *rel = ota_release();
 
 	char size_text[32], message[128];
-	sysinfo_format_size((uint64_t)rel->size, size_text, sizeof(size_text));
+	sysinfo_format_size((uint64_t)(rel->packages_only ? 0 : rel->size) + (uint64_t)rel->packages_size, size_text, sizeof(size_text));
 	snprintf(message, sizeof(message), tr("system_update_version_size"), rel->tag, size_text);
 
 	layout(rel->test_build ? "Sonix Books - Test build" : PRODUCT_NAME, message, true, false);
 
 	render_notes(rel->notes);
+	if (rel->packages_size) notes_text_label(notes_content,
+		rel->packages_only ? "Install reader engines, fonts and dictionaries on the SD card. Firmware is already current." :
+		"Large reader engines, fonts and dictionaries install on the SD card. The core firmware stays within the R1 image limit.", &font_ui_20);
 	fit_notes();
 
 	set_button(0, "system_update", true, download_clicked);
@@ -593,6 +596,10 @@ static void check_finished(ota_result_t r) {
 static void download_finished(ota_result_t r) {
 	switch (r) {
 	case OTA_OK:
+		if (ota_release()->packages_only) {
+			show_notice("SD-card packages installed and verified. You can open your books now.");
+			break;
+		}
 		layout(ota_release()->test_build ? "Test build ready" : "Update ready",
 			ota_release()->test_build ? "Download verified. This build has not passed an R1 hardware test. Install now?" :
 			"Download verified. Keep power stable while installing.", false, false);

@@ -1,4 +1,5 @@
 #include "src/system/ebook/epub_internal.h"
+#include "ebook_native.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 // it is freed in ebook_close() after the mappings have gone.
 
 ebook_t *ebook_open(const char *path) {
+	ebook_native_error(NULL);
 	if (!path || !path[0]) {
 		return NULL;
 	}
@@ -24,11 +26,25 @@ ebook_t *ebook_open(const char *path) {
 	if (!book->path) {
 		goto fail;
 	}
-	if (!epub_zip_open(&book->zip, path, &book->book_arena)) {
-		goto fail;
-	}
-	if (!epub_read_structure(book)) {
-		goto fail;
+	book->format = ebook_format(path);
+	if (book->format == EBOOK_FORMAT_TEXT) {
+		if (!ebook_text_open(book)) goto fail;
+	} else if (book->format == EBOOK_FORMAT_NATIVE) {
+		ebook_native_result_t info;
+		if (!ebook_native_call(path, "info", 0, &book->book_arena, &info) || !info.pages) goto fail;
+		book->native_backend = true; book->fixed_layout = (info.flags & BOOKTOOL_FIXED) != 0;
+		book->spine_count = info.pages;
+		if (info.title[0]) book->title = arena_strdup(&book->book_arena, info.title);
+		if (info.author[0]) book->author = arena_strdup(&book->book_arena, info.author);
+	} else {
+		const char *epub = path;
+		if (book->format == EBOOK_FORMAT_KINDLE) {
+			ebook_native_result_t prepared;
+			if (!ebook_native_call(path, "prepare", 0, &book->book_arena, &prepared) ||
+				!(prepared.flags & BOOKTOOL_EPUB) || !prepared.text_size) goto fail;
+			epub = prepared.text;
+		} else if (book->format != EBOOK_FORMAT_EPUB) goto fail;
+		if (!epub_zip_open(&book->zip, epub, &book->book_arena) || !epub_read_structure(book)) goto fail;
 	}
 
 	if (!book->title) {
@@ -52,6 +68,7 @@ void ebook_close(ebook_t *book) {
 		return;
 	}
 	epub_zip_close(&book->zip);
+	if (book->text_file) fclose(book->text_file);
 	arena_destroy(&book->chapter_arena);
 	arena_destroy(&book->book_arena);
 	free(book);
@@ -68,6 +85,7 @@ bool ebook_is_japanese(const ebook_t *book) {
 }
 
 bool ebook_is_vertical(const ebook_t *book) { return book && book->rtl && ebook_is_japanese(book); }
+bool ebook_is_fixed(const ebook_t *book) { return book && book->fixed_layout; }
 uint32_t ebook_spine_count(const ebook_t *book) { return book ? book->spine_count : 0; }
 uint32_t ebook_toc_count(const ebook_t *book) { return book ? book->toc_count : 0; }
 
@@ -93,8 +111,11 @@ static void weights_build(ebook_t *book) {
 	}
 	book->weights_total = 0;
 	for (uint32_t i = 0; i < book->spine_count; i++) {
-		int index = epub_zip_find(&book->zip, book->spine[i].path);
-		book->weights[i] = index >= 0 ? epub_zip_size(&book->zip, index) : 0;
+		if (book->native_backend) book->weights[i] = 1;
+		else {
+			int index = epub_zip_find(&book->zip, book->spine[i].path);
+			book->weights[i] = index >= 0 ? epub_zip_size(&book->zip, index) : 0;
+		}
 		book->weights_total += book->weights[i];
 	}
 }
@@ -172,6 +193,13 @@ void *ebook_load_image(ebook_t *book, const char *zip_path, uint32_t *size_out) 
 	if (!book || !zip_path || !zip_path[0]) {
 		return NULL;
 	}
+	if (book->native_backend) {
+		if (strcmp(zip_path, "native-page") || !book->native_image || !book->native_image_size) return NULL;
+		void *copy = malloc(book->native_image_size);
+		if (copy) { memcpy(copy, book->native_image, book->native_image_size); if (size_out) *size_out = book->native_image_size; }
+		return copy;
+	}
+	if (!book->zip.file) return NULL;
 	int index = epub_zip_find(&book->zip, zip_path);
 	if (index < 0) {
 		return NULL;
@@ -209,6 +237,7 @@ void *ebook_peek_cover(const char *path, uint32_t *size_out, char *title, size_t
 	// round: the alternative is a second path through the OPF that would have
 	// to be kept correct alongside this one, and the shelf builds its thumbnails
 	// once and then reads them from the card.
+	if (ebook_format(path) != EBOOK_FORMAT_EPUB) return NULL;
 	ebook_t *book = ebook_open(path);
 	if (!book) {
 		return NULL;
@@ -235,7 +264,7 @@ void *ebook_peek_cover(const char *path, uint32_t *size_out, char *title, size_t
 }
 
 
-bool ebook_open_chapter(ebook_t *book, uint32_t spine_index) {
+static bool open_chapter(ebook_t *book, uint32_t spine_index, bool search) {
 	if (!book || spine_index >= book->spine_count) {
 		return false;
 	}
@@ -245,6 +274,19 @@ bool ebook_open_chapter(ebook_t *book, uint32_t spine_index) {
 	// exists to prevent -- and the failure path below would then leave the old
 	// one half-replaced.
 	ebook_close_chapter(book);
+	if (book->format == EBOOK_FORMAT_TEXT) {
+		if (!ebook_text_chapter(book, spine_index)) goto fail;
+		book->chapter_loaded = true; book->chapter_index = spine_index; return true;
+	}
+	if (book->native_backend) {
+		ebook_native_result_t page;
+		if (!ebook_native_call(book->path, search ? "text" : "page", spine_index, &book->chapter_arena, &page)) goto fail;
+		if (page.png_size) {
+			book->native_image = page.png; book->native_image_size = page.png_size;
+			if (!epub_parse_chapter(book, "<html><body><img src=\"native-page\"/></body></html>")) goto fail;
+		} else if (!page.text || !epub_parse_chapter(book, page.text)) goto fail;
+		book->chapter_loaded = true; book->chapter_index = spine_index; return true;
+	}
 
 	int index = epub_zip_find(&book->zip, book->spine[spine_index].path);
 	if (index < 0) {
@@ -286,6 +328,9 @@ fail:
 	return false;
 }
 
+bool ebook_open_chapter(ebook_t *book, uint32_t spine_index) { return open_chapter(book, spine_index, false); }
+bool ebook_open_search_chapter(ebook_t *book, uint32_t spine_index) { return open_chapter(book, spine_index, true); }
+
 void ebook_close_chapter(ebook_t *book) {
 	if (!book) {
 		return;
@@ -297,6 +342,8 @@ void ebook_close_chapter(ebook_t *book) {
 	book->span_count = 0;
 	book->text = NULL;
 	book->text_len = 0;
+	book->native_image = NULL;
+	book->native_image_size = 0;
 	arena_destroy(&book->chapter_arena);
 }
 

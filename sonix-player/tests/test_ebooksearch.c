@@ -21,7 +21,7 @@ ebook_t *ebook_open(const char *path) {
 void ebook_close(ebook_t *b) { if(b) {closed++; free(b);} }
 uint32_t ebook_spine_count(const ebook_t *b) {(void)b; return nchapter;}
 uint32_t ebook_chapter_weight(ebook_t *b,uint32_t i) {(void)b; return chapters[i].weight;}
-bool ebook_open_chapter(ebook_t *b,uint32_t i) {loaded++; b->chapter=i; return !chapters[i].fail;}
+bool ebook_open_search_chapter(ebook_t *b,uint32_t i) {loaded++; b->chapter=i; return !chapters[i].fail;}
 const char *ebook_chapter_text(const ebook_t *b) {return chapters[b->chapter].text;}
 uint32_t ebook_block_count(const ebook_t *b) {return chapters[b->chapter].nblocks;}
 const ebook_block_t *ebook_block(const ebook_t *b,uint32_t i) {

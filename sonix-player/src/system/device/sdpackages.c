@@ -46,9 +46,13 @@ static bool join(char *out, size_t size, const char *a, const char *b) {
 	int n = snprintf(out, size, "%s/%s", a, b);
 	return n > 0 && (size_t)n < size;
 }
-static bool safe_path(const char *path) {
-	if (!path || strlen(path) >= 256 || (strncmp(path, "Ebook/Fonts/", 12) &&
-		strncmp(path, "Ebook/Dictionaries/", 19) && strncmp(path, "Ebook/Tools/", 12))) return false;
+static bool safe_path(const char *path, const char *game) {
+	if (!path || strlen(path) >= 256) return false;
+	if (game) {
+		char prefix[SD_GAME_ID_MAX + 8];
+		snprintf(prefix, sizeof(prefix), "Games/%s/", game);
+		if (strncmp(path, prefix, strlen(prefix))) return false;
+	} else if (strncmp(path, "Ebook/Fonts/", 12) && strncmp(path, "Ebook/Dictionaries/", 19) && strncmp(path, "Ebook/Tools/", 12)) return false;
 	const char *part = path; unsigned depth = 0;
 	for (const char *p = path;; p++) {
 		if (*p && ((unsigned char)*p < 32 || (unsigned char)*p > 126 || *p == '\\' || *p == ':')) return false;
@@ -208,7 +212,7 @@ static sdpackages_result_t extract(transfer_t *t, const member_t *member, const 
 	return result;
 }
 
-static sdpackages_result_t install(const char *root, int category, const char *archive, const char *version, const char *expected,
+static sdpackages_result_t install(const char *root, int category, const char *game, const char *archive, const char *version, const char *expected,
 	sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user) {
 	if (!root || !root[0] || !archive || !sdpackages_valid_version(version) || !hex_digest(expected)) return SDPACKAGES_INVALID;
 	transfer_t transfer = {.cancel = cancel, .progress = progress, .user = user};
@@ -247,7 +251,7 @@ static sdpackages_result_t install(const char *root, int category, const char *a
 		long bytes = manifest_number(&doc, item, "bytes"), packed = manifest_number(&doc, item, "compressed");
 		valid = item >= 0 && doc.toks[item].type == JSON_OBJECT && bytes >= 0 && (unsigned long)bytes <= 128u * 1024u * 1024u && packed > 0 &&
 			(unsigned long)packed <= SDPACKAGES_MAX_BYTES && manifest_string(&doc, item, "path", m->path, sizeof(m->path)) &&
-			safe_path(m->path) && manifest_string(&doc, item, "sha256", m->sha, sizeof(m->sha)) && hex_digest(m->sha);
+			safe_path(m->path, game) && manifest_string(&doc, item, "sha256", m->sha, sizeof(m->sha)) && hex_digest(m->sha);
  		if (valid && category >= 0) {
 			char prefix[64];
 			snprintf(prefix, sizeof(prefix), "Ebook/%s/", sdpackages_extra_folder((unsigned)category));
@@ -266,8 +270,10 @@ static sdpackages_result_t install(const char *root, int category, const char *a
 	uint64_t available = (uint64_t)vfs.f_bavail * (vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize);
 	if (available < expanded + SPACE_MARGIN) { free(members); fclose(file); return SDPACKAGES_NO_SPACE; }
 	char sonix[PATH_SIZE], base[PATH_SIZE], stage[PATH_SIZE], final[PATH_SIZE], marker[PATH_SIZE];
+	char game_base[SD_GAME_ID_MAX + 8];
+	if (game) snprintf(game_base, sizeof(game_base), "game-%s", game);
 	valid = directory(root, false) && join(sonix, sizeof(sonix), root, ".sonix") && directory(sonix, true) &&
-		join(base, sizeof(base), sonix, category < 0 ? "packages" : sdpackages_extra_base((unsigned)category)) && directory(base, true);
+		join(base, sizeof(base), sonix, game ? game_base : category < 0 ? "packages" : sdpackages_extra_base((unsigned)category)) && directory(base, true);
 	int format = valid ? snprintf(stage, sizeof(stage), "%s/stage-XXXXXX", base) : -1;
 	if (format < 0 || (size_t)format >= sizeof(stage) || !mkdtemp(stage)) { free(members); fclose(file); return SDPACKAGES_IO; }
 	char new_generation[SDPACKAGES_VERSION];
@@ -281,7 +287,8 @@ static sdpackages_result_t install(const char *root, int category, const char *a
 	free(members); fclose(file);
 	if (stopped(&transfer)) result = SDPACKAGES_CANCELLED;
 	char old[SDPACKAGES_VERSION] = "", old_version[SDPACKAGES_VERSION], complete[96];
-	if (category < 0) (void)sdpackages_generation(root, old, old_version);
+	if (game) (void)sdpackages_game_generation(root, game, old, old_version);
+	else if (category < 0) (void)sdpackages_generation(root, old, old_version);
 	else (void)sdpackages_extra_generation(root, (unsigned)category, old, old_version);
 	if (result == SDPACKAGES_OK) {
 		snprintf(complete, sizeof(complete), "SDPKG1 %s\n", version);
@@ -296,10 +303,16 @@ static sdpackages_result_t install(const char *root, int category, const char *a
 
 sdpackages_result_t sdpackages_install(const char *root, const char *archive, const char *version, const char *sha256,
 	sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user) {
-	return install(root, -1, archive, version, sha256, cancel, progress, user);
+	return install(root, -1, NULL, archive, version, sha256, cancel, progress, user);
 }
 sdpackages_result_t sdpackages_install_extra(const char *root, unsigned category, const char *archive, const char *version,
 	const char *sha256, sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user) {
 	if (category >= SD_EXTRAS_COUNT) return SDPACKAGES_INVALID;
-	return install(root, (int)category, archive, version, sha256, cancel, progress, user);
+	return install(root, (int)category, NULL, archive, version, sha256, cancel, progress, user);
+}
+
+sdpackages_result_t sdpackages_install_game(const char *root, const char *id, const char *archive,
+	const char *version, const char *sha256, sdpackages_cancel_t cancel, sdpackages_progress_t progress, void *user) {
+	if (!sdpackages_game_id(id)) return SDPACKAGES_INVALID;
+	return install(root, -1, id, archive, version, sha256, cancel, progress, user);
 }

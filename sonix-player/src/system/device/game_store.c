@@ -7,6 +7,61 @@
 #define PREFIX "sonix-game-v1-"
 #define SUFFIX ".spk"
 
+typedef struct {const char *id;game_store_profile_t profile;} profile_entry_t;
+static const profile_entry_t profiles[]={
+	{"2048",{"Sonix 2048","Slide and merge tiles. Play offline; no ROM required.",GAME_STORE_GAME,true}},
+	{"quicknes",{"QuickNES","Nintendo Entertainment System emulator. Requires your own NES ROMs.",GAME_STORE_EMULATOR,false}},
+	{"nes",{"QuickNES","Nintendo Entertainment System emulator. Requires your own NES ROMs.",GAME_STORE_EMULATOR,false}},
+	{"gpsp",{"gpSP","Game Boy Advance emulator. Requires your own GBA ROMs and any required BIOS.",GAME_STORE_EMULATOR,false}},
+	{"gba",{"gpSP","Game Boy Advance emulator. Requires your own GBA ROMs and any required BIOS.",GAME_STORE_EMULATOR,false}},
+	{"snes9x",{"Snes9x","Super Nintendo emulator. Requires your own SNES ROMs.",GAME_STORE_EMULATOR,false}},
+	{"picodrive",{"PicoDrive","Sega Genesis / Mega Drive emulator. Requires your own ROMs.",GAME_STORE_EMULATOR,false}},
+	{"doom",{"Doom","Classic first-person shooter engine. Requires compatible game data.",GAME_STORE_GAME,false}},
+	{"freedoom",{"Freedoom","Open-source Doom-compatible game data and engine.",GAME_STORE_GAME,false}},
+	{"snake",{"Snake","Classic arcade puzzle.",GAME_STORE_GAME,true}},
+	{"minesweeper",{"Minesweeper","Logic puzzle. No ROM required.",GAME_STORE_GAME,true}},
+	{"solitaire",{"Solitaire","Classic single-player card game.",GAME_STORE_GAME,true}}
+};
+const game_store_profile_t *game_store_profile(const char *id) {
+	if(id)for(size_t i=0;i<sizeof(profiles)/sizeof(*profiles);++i)
+		if(!strcmp(id,profiles[i].id))return &profiles[i].profile;
+	return NULL;
+}
+static void display_metadata(game_store_item_t *item,const json_doc_t *doc,int asset) {
+	const game_store_profile_t *p=game_store_profile(item->id);
+	if(p) {
+		snprintf(item->title,sizeof(item->title),"%s",p->title);
+		snprintf(item->description,sizeof(item->description),"%s",p->description);
+		item->kind=p->kind;
+	}else{
+		snprintf(item->title,sizeof(item->title),"%s",item->id);
+		for(unsigned i=0;item->title[i];++i) {
+			if(item->title[i]=='-')item->title[i]=' ';
+			else if((!i||item->title[i-1]==' ')&&item->title[i]>='a'&&item->title[i]<='z')item->title[i]-='a'-'A';
+		}
+		snprintf(item->description,sizeof(item->description),"Downloadable native package. Check its requirements before playing.");
+	}
+	// Optional GitHub asset label: sonix-ui1|game/emulator|title|description.
+	// Display text only: never influences the URL, ABI, file paths or control mapping.
+	char label[256];
+	int tok=json_get(doc,asset,"label");
+	if(tok<0||doc->toks[tok].type!=JSON_STRING||
+		doc->toks[tok].end-doc->toks[tok].start>=(int)sizeof(label)||
+		!json_str(doc,tok,label,sizeof(label)))return;
+	for(const unsigned char *q=(const unsigned char*)label;*q;++q)if(*q<32||*q>126)return;
+	const char *prefix="sonix-ui1|";if(strncmp(label,prefix,strlen(prefix)))return;
+	char *kind=label+strlen(prefix),*title=strchr(kind,'|');
+	if(!title)return;
+	*title++=0;
+	char *description=strchr(title,'|');
+	if(!description)return;
+	*description++=0;
+	if(!*title||!*description||strchr(description,'|')||strlen(title)>=sizeof(item->title)||strlen(description)>=sizeof(item->description))return;
+	game_store_kind_t k=!strcmp(kind,"game")?GAME_STORE_GAME:!strcmp(kind,"emulator")?GAME_STORE_EMULATOR:GAME_STORE_OTHER;
+	if(k==GAME_STORE_OTHER)return;
+	item->kind=k;memcpy(item->title,title,strlen(title)+1);memcpy(item->description,description,strlen(description)+1);
+}
+
 static bool version_ok(const char *s, long out[4]) {
 	char canonical[SDPACKAGES_VERSION];
 	if (!ota_policy_version(s, out)) return false;
@@ -54,6 +109,7 @@ bool game_store_parse(const char *body, game_store_item_t *items, size_t capacit
 			!json_obj_str(&doc,a,"state",state,sizeof(state)) || strcmp(state,"uploaded") ||
 			!json_obj_str(&doc,a,"browser_download_url",item.url,sizeof(item.url)) || strcmp(expected,item.url) ||
 			!json_obj_str(&doc,a,"digest",digest,sizeof(digest)) || !ota_policy_digest(digest)) continue;
+		display_metadata(&item,&doc,a);
 		memcpy(item.sha256,digest+7,65);
 		for (int j=0; item.sha256[j]; ++j) if (item.sha256[j]>='A' && item.sha256[j]<='F') item.sha256[j]+='a'-'A';
 		size_t k=0;

@@ -141,7 +141,7 @@ jobs:
           request=json.loads(Path('game-store/core-request.json').read_text())
           report=json.loads(Path('candidate/report.json').read_text())
           assert request.get('channel')=='device-test'
-          assert request['id']=='2048' and request['version']=='v1.0.0'
+          assert request['id']=='2048' and request['version'] in ('v1.0.0','v1.1.0')
           assert report['version']==request['version'] and report['runtime_abi']==1 and report['hardware_verified'] is False
           asset='sonix-game-v1-'+request['id']+'-'+request['version']+'.spk'
           assert hashlib.sha256((Path('candidate')/asset).read_bytes()).hexdigest()==report['sha256']

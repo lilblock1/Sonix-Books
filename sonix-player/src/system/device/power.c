@@ -1073,6 +1073,7 @@ void power_shutdown(void) {
 	// position seeked to while paused, which changes no state at all, would
 	// never be written.
 	device_state_remember_flush();
+	ebookreader_flush_progress();
 
 	// The time goes into the RTC before anything else, exactly as the stock
 	// player does on its way out: whatever the clock has learned since it was
@@ -1593,6 +1594,7 @@ bool power_update_display_policy(void) {
 }
 
 void power_screen_off(void) {
+	ebookreader_flush_progress();
 	waveform_set_screen_on(false); // told, but not a reason to stop -- see waveform.h
 	if (!g_screen_on) {
 		return;

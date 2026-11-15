@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
 
@@ -431,6 +432,8 @@ static void package_progress(uint64_t done, uint64_t total, void *user) {
 	progress_done = downloads + (long)done; progress_total = downloads + (long)total;
 	pthread_mutex_unlock(&lock);
 }
+static ota_result_t download_to_card(const char *root, const struct statvfs *vfs);
+
 static ota_result_t do_download(void) {
 	char digest[80];
 	snprintf(digest, sizeof(digest), "sha256:%s", release.sha256);
@@ -439,11 +442,39 @@ static ota_result_t do_download(void) {
 		snprintf(digest, sizeof(digest), "sha256:%s", release.packages_sha256);
 		if (!ota_policy_digest(digest) || !ota_policy_package(repo, release.tag, release.packages_url, release.packages_size)) return OTA_CHECK_FAILED;
 	}
-	const char *root = storage_sd_root();
-	if (!root || !root[0]) return OTA_NO_CARD;
+	const char *mount_path = storage_sd_root();
+	if (!mount_path || !mount_path[0] || !storage_card_attached()) return OTA_NO_CARD;
+
+	// An unmounted SD mount point is an ordinary directory on internal flash.
+	// Open the card first and require a separate filesystem at its mount root.
+	// Pin that directory for the whole transaction: if the card is unmounted
+	// or replaced, our path still refers to the original filesystem, never
+	// the exposed internal directory or a newly inserted card.
+	int card = open(mount_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (card < 0) return OTA_NO_CARD;
+	struct stat mounted, parent;
 	struct statvfs vfs;
-	if (statvfs(root, &vfs)) return OTA_NO_CARD;
-	uint64_t free_bytes = (uint64_t)vfs.f_bavail * (vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize);
+	if (fstat(card, &mounted) || fstatat(card, "..", &parent, 0) ||
+		mounted.st_dev == parent.st_dev || fstatvfs(card, &vfs) ||
+		(vfs.f_flag & ST_RDONLY)) {
+		close(card);
+		return OTA_NO_CARD;
+	}
+	// The trailing /. yields the actual directory rather than the procfs
+	// descriptor symlink (the SD package installer rejects symlink roots).
+	char root[64];
+	int root_length = snprintf(root, sizeof(root), "/proc/self/fd/%d/.", card);
+	if (root_length < 0 || (size_t)root_length >= sizeof(root)) {
+		close(card);
+		return OTA_NO_CARD;
+	}
+	ota_result_t result = download_to_card(root, &vfs);
+	close(card);
+	return result;
+}
+
+static ota_result_t download_to_card(const char *root, const struct statvfs *vfs) {
+	uint64_t free_bytes = (uint64_t)vfs->f_bavail * (vfs->f_frsize ? vfs->f_frsize : vfs->f_bsize);
 	long firmware_bytes = release.packages_only ? 0 : release.size;
 	// Installer checks expanded-space requirements separately, before staging.
 	if (free_bytes < (uint64_t)firmware_bytes + (uint64_t)release.packages_size + SPACE_MARGIN) return OTA_NO_SPACE;

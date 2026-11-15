@@ -84,6 +84,31 @@ bool sdpackages_game_generation(const char *root, const char *id, char generatio
 	return generation_in(root, name, generation, version);
 }
 
+bool sdpackages_game_core(const char *root, const char *id, char *out, size_t size) {
+	if (!out || !size) return false;
+	out[0] = 0;
+	char name[SD_GAME_ID_MAX + 8], generation[SDPACKAGES_VERSION], version[SDPACKAGES_VERSION], path[1100];
+	if (!sdpackages_game_generation(root, id, generation, version)) return false;
+	snprintf(name, sizeof(name), "game-%s", id);
+	if (!base(root,name,path,sizeof(path))) return false;
+	size_t used=strlen(path);
+	int n=snprintf(path+used,sizeof(path)-used,"/%s",generation);
+	if(n<0 || (size_t)n>=sizeof(path)-used || !ordinary(path,true)) return false;
+	used=strlen(path);
+	if(used+sizeof("/Games")>=sizeof(path)) return false;
+	memcpy(path+used,"/Games",sizeof("/Games"));
+	if(!ordinary(path,true)) return false;
+	used=strlen(path);
+	n=snprintf(path+used,sizeof(path)-used,"/%s",id);
+	if(n<0 || (size_t)n>=sizeof(path)-used || !ordinary(path,true)) return false;
+	used=strlen(path);
+	if(used+sizeof("/core.so")>=sizeof(path)) return false;
+	memcpy(path+used,"/core.so",sizeof("/core.so"));
+	if(!ordinary(path,false) || strlen(path)>=size) return false;
+	memcpy(out,path,strlen(path)+1);
+	return true;
+}
+
 bool sdpackages_generation(const char *root, char generation[SDPACKAGES_VERSION], char version[SDPACKAGES_VERSION]) {
 	return generation_in(root, "packages", generation, version);
 }

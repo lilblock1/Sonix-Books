@@ -1,0 +1,31 @@
+name: Native SD-card readers
+on:
+  push:
+    branches: ['codex/common-book-formats']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-readers-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native reader build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git cmake autoconf automake libtool pkg-config python3
+      - uses: actions/cache@v4
+        with:
+          path: sonix-player/native-sdk
+          key: native-reader-host-${{ hashFiles('sonix-player/tools/native-reader/sources.json') }}-v1
+      - name: Build pinned native readers and collect their licenses
+        run: python3 sonix-player/tools/native-reader/build.py --target host --output native-host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-reader-host
+          path: native-host/
+          retention-days: 14

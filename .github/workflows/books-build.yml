@@ -169,6 +169,10 @@ jobs:
           gcc -std=c11 -Wall -Wextra -Werror -I. tests/test_ota_policy.c \
             src/system/device/ota_policy.c src/system/device/sdpackages_paths.c -o build_tests/test_ota_policy
           ./build_tests/test_ota_policy
+          gcc -std=c11 -Wall -Wextra -Werror -I. tests/test_game_store.c \
+            src/system/device/game_store.c src/system/device/ota_policy.c \
+            src/system/device/sdpackages_paths.c src/system/core/json.c -o build_tests/test_game_store
+          ./build_tests/test_game_store
       - name: Test verified test-release publication policy
         run: python3 sonix-player/tests/test_test_release.py
       - name: Test firmware chunk verification

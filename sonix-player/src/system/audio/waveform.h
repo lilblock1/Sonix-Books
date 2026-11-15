@@ -31,9 +31,8 @@
 // opens: a whole file read off the card at that moment takes the free memory a
 // USB DAC's driver is allocating its buffers from. And it hands the file's
 // pages back to the kernel behind itself, so the read fills no cache.
-// It does NOT stop when the screen goes dark -- that is the
-// one moment nothing else wants the core, and the answer is kept, so the work
-// done then is work nobody ever waits for.
+// Uncached decoding is restricted to the visible player. Completed shapes
+// stay cached; hidden or dark-screen work is cancelled to save battery.
 // ---------------------------------------------------------------------------
 
 #define WAVEFORM_BARS 48
@@ -66,11 +65,9 @@ int waveform_get(const char *path, uint8_t *out);
 // on it" rather than "there is nothing here".
 bool waveform_pending(const char *path);
 
-// Told when the screen goes dark or comes back. It does NOT stop the worker: a
-// shape is worked out for the file, not for the moment, and is kept in
-// waveform.dat, so a dark screen is the best time there is to compute one --
-// the interface is not drawing and an idle-class thread finally gets the core.
-// All this does is record the state and nudge the worker on the way back.
+// Cancel uncached work when the screen or the player is not visible. The
+// wanted path and completed cache survive; showing the player resumes demand.
 void waveform_set_screen_on(bool on);
+void waveform_set_visible(bool visible);
 
 #endif // WAVEFORM_H

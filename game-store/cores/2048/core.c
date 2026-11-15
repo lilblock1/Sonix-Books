@@ -35,6 +35,7 @@ static uint16_t frame[W*H];
 typedef struct { uint32_t rng,score; uint8_t cells[16]; } game_state_t;
 static game_state_t game;
 static uint16_t previous_keys;
+static bool dirty=true;
 
 static uint32_t next_random(void) {
 	uint32_t x=game.rng?game.rng:0x8852c9d1u;
@@ -52,7 +53,7 @@ static void spawn(void) {
 static void reset(void) {
 	uint32_t seed=next_random();
 	memset(&game,0,sizeof(game)); game.rng=seed;
-	spawn(); spawn(); previous_keys=0;
+	spawn(); spawn(); previous_keys=0;dirty=true;
 }
 static unsigned index_at(unsigned direction,unsigned line,unsigned pos) {
 	switch(direction) {
@@ -141,7 +142,7 @@ void retro_deinit(void) {}
 void retro_get_system_info(struct retro_system_info *i) {*i=(struct retro_system_info){"Sonix 2048","1.0.0","",false,false};}
 void retro_get_system_av_info(struct retro_system_av_info *i) {*i=(struct retro_system_av_info){{W,H,W,H,1.0f},{FPS,44100.0}};}
 bool retro_load_game(const struct retro_game_info *info) {
-	(void)info;
+	if(info)return false; // native game, never load a ROM
 	unsigned fmt=PIXEL_RGB565;
 	if(!environment || !environment(ENV_PIXEL_FORMAT,&fmt)) return false;
 	reset();return true;
@@ -157,11 +158,12 @@ void retro_run(void) {
 	uint16_t pressed=(uint16_t)(keys&~previous_keys);
 	if(pressed&(1u<<3)) reset();
 	else for(unsigned d=0;d<4;++d) if(pressed&(1u<<(d+4))) {
-		if(slide(d)) spawn();
+		if(slide(d)) {spawn();dirty=true;}
 		break;
 	}
 	previous_keys=keys;
-	draw(); if(video) video(frame,W,H,W*sizeof(uint16_t));
+	if(dirty){draw();dirty=false;if(video)video(frame,W,H,W*sizeof(uint16_t));}
+	else if(video)video(NULL,W,H,W*sizeof(uint16_t));
 }
 size_t retro_serialize_size(void) {return sizeof(game);}
 bool retro_serialize(void *data,size_t size) {
@@ -172,7 +174,7 @@ bool retro_unserialize(const void *data,size_t size) {
 	if(!data||size!=sizeof(game)) return false;
 	const uint8_t *bytes=data;
 	for(unsigned i=0;i<16;++i) if(bytes[offsetof(game_state_t,cells)+i]>30) return false;
-	memcpy(&game,data,size); previous_keys=0;return true;
+	memcpy(&game,data,size); previous_keys=0;dirty=true;return true;
 }
 unsigned retro_get_region(void) {return 0;}
 void *retro_get_memory_data(unsigned id) {(void)id;return NULL;}
@@ -182,7 +184,16 @@ void retro_cheat_set(unsigned index,bool enabled,const char *code) {(void)index;
 
 #ifdef SONIX_CORE_TEST
 #include <assert.h>
+static bool test_env(unsigned cmd,void *data) {return cmd==ENV_SUPPORT_NO_GAME?*(bool*)data:cmd==ENV_PIXEL_FORMAT&&*(unsigned*)data==PIXEL_RGB565;}
+static unsigned rendered;
+static void test_video(const void *data,unsigned w,unsigned h,size_t pitch) {assert(w==W&&h==H&&pitch==W*2);if(data)++rendered;}
 int main(void) {
+	retro_set_environment(test_env);retro_set_video_refresh(test_video);
+	retro_init();assert(retro_load_game(NULL));
+	retro_run();retro_run();assert(rendered==1);
+	game_state_t saved;assert(retro_serialize(&saved,sizeof(saved)));
+	retro_reset();assert(retro_unserialize(&saved,sizeof(saved)));
+	assert(!memcmp(&saved,&game,sizeof(game)));retro_run();assert(rendered==2);
 	reset();
 	unsigned n=0;
 	for(unsigned i=0;i<16;++i) n+=!!game.cells[i];

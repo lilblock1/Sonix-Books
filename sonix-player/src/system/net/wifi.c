@@ -1438,6 +1438,15 @@ static void set_enabled(bool on, bool remember) {
 		}
 		return;
 	}
+	// Do not publish a new radio state if the command cannot be queued.
+	if (queue_count >= JOB_QUEUE_LEN) {
+		pthread_mutex_unlock(&lock);
+		fprintf(stderr, "wifi: power request deferred; queue full\n");
+		return;
+	}
+	job_t job = {.type = JOB_POWER, .arg_int = on ? (remember ? 1 : 2) : 0};
+	queue[(queue_head + queue_count) % JOB_QUEUE_LEN] = job;
+	queue_count++;
 	g_enabled = on;
 	g_power_busy = true;
 	if (!on) {
@@ -1446,6 +1455,7 @@ static void set_enabled(bool on, bool remember) {
 		g_network_count = 0;
 		g_serial++;
 	}
+	pthread_cond_signal(&wake);
 	pthread_mutex_unlock(&lock);
 
 	if (remember) {
@@ -1453,8 +1463,6 @@ static void set_enabled(bool on, bool remember) {
 		config_save();
 	}
 
-	job_t job = {.type = JOB_POWER, .arg_int = on ? (remember ? 1 : 2) : 0};
-	post_job(&job);
 }
 
 void wifi_set_enabled(bool on) { set_enabled(on, true); }

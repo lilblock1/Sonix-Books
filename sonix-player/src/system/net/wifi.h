@@ -108,6 +108,9 @@ bool wifi_interface_address(char *out, size_t size);
 // Each poll is a fork of the whole player; on one core they come out of the
 // transfer's throughput. Costs a few seconds of lag on the signal bars.
 void wifi_set_status_poll_slow(bool slow);
+// Keep status responsive on the Wi-Fi settings page; elsewhere a stable
+// connection can be polled less often.
+void wifi_set_settings_visible(bool visible);
 
 // Kicks a scan. Results land in the list a few seconds later; the page watches
 // wifi_networks_serial() to know when to redraw.

@@ -56,6 +56,8 @@ static char *notes_text;
 static char repo[128];
 static char stem[64];
 static bool checking_test;
+static unsigned extras_mask;
+static struct { long size; char url[512], sha[65]; } extras[SD_EXTRAS_COUNT];
 
 static unsigned char chunk[64 * 1024];
 
@@ -299,6 +301,49 @@ static ota_result_t pick_release(const json_doc_t *doc) {
 	return OTA_OK;
 }
 
+static ota_result_t pick_extras(const json_doc_t *doc) {
+	int root = json_root(doc);
+	long installed[4];
+	if (root < 0 || doc->toks[root].type != JSON_ARRAY ||
+		!ota_policy_version(ota_installed_version(), installed)) return OTA_CHECK_FAILED;
+	for (int i = 0; i < json_len(doc, root); ++i) {
+		int rel = json_at(doc, root, i);
+		char tag[32];
+		long version[4];
+		if (!json_obj_str(doc, rel, "tag_name", tag, sizeof(tag)) ||
+			!ota_policy_version(tag, version) || ota_policy_version_cmp(installed, version) ||
+			!ota_policy_release(true, json_obj_bool(doc, rel, "draft", true),
+				json_obj_bool(doc, rel, "prerelease", true), tag) || find_asset(doc, rel) < 0) continue;
+		memset(extras, 0, sizeof(extras));
+		long total = 0;
+		for (unsigned k = 0; k < SD_EXTRAS_COUNT; ++k) {
+			if (!(extras_mask & (1u << k))) continue;
+			const char *name = sdpackages_extra_asset(k);
+			int asset = find_named_asset(doc, rel, name);
+			if (asset < 0) return OTA_EXTRAS_UNAVAILABLE;
+			char digest[80], expected[512];
+			extras[k].size = json_obj_long(doc, asset, "size", 0);
+			int n = snprintf(expected, sizeof(expected), "https://github.com/%s/releases/download/%s/%s", repo, tag, name);
+			if (n < 0 || (size_t)n >= sizeof(expected) || extras[k].size <= 0 ||
+				(unsigned long)extras[k].size > SDPACKAGES_MAX_BYTES ||
+				!json_obj_str(doc, asset, "browser_download_url", extras[k].url, sizeof(extras[k].url)) ||
+				strcmp(expected, extras[k].url) ||
+				!json_obj_str(doc, asset, "digest", digest, sizeof(digest)) || !ota_policy_digest(digest)) return OTA_CORRUPT;
+			memcpy(extras[k].sha, digest + 7, 65);
+			total += extras[k].size;
+		}
+		memset(&release, 0, sizeof(release));
+		release.notes = "";
+		release.packages_only = true;
+		memcpy(release.tag, tag, strlen(tag) + 1);
+		pthread_mutex_lock(&lock);
+		progress_total = total;
+		pthread_mutex_unlock(&lock);
+		return OTA_OK;
+	}
+	return OTA_EXTRAS_UNAVAILABLE;
+}
+
 static ota_result_t do_check(void) {
 	// The reader may have just restored a previously enabled radio. Wait
 	// on this worker, never the UI thread, for association and DHCP. Do
@@ -340,7 +385,7 @@ static ota_result_t do_check(void) {
 	json_doc_t doc;
 	ota_result_t r = OTA_CHECK_FAILED;
 	if (json_parse(body, &doc)) {
-		r = pick_release(&doc);
+		r = extras_mask ? pick_extras(&doc) : pick_release(&doc);
 		json_free(&doc);
 	} else {
 		printf("ota: release list is not valid JSON (%zu bytes)\n", body_len);
@@ -361,6 +406,7 @@ bool ota_check_start(void) {
 		return false;
 	}
 	release_valid = false;
+	extras_mask = 0;
 	checking_test = ota_test_channel();
 
 	const char *r = sysinfo_ota_repo();
@@ -445,13 +491,46 @@ static void package_progress(uint64_t done, uint64_t total, void *user) {
 }
 static ota_result_t download_to_card(const char *root, const struct statvfs *vfs);
 
+static ota_result_t download_extras_to_card(const char *root) {
+	long done = 0;
+	for (unsigned k = 0; k < SD_EXTRAS_COUNT; ++k) {
+		if (!(extras_mask & (1u << k))) continue;
+		if (cancelled()) return OTA_CANCELLED;
+		struct statvfs vfs;
+		if (statvfs(root, &vfs)) return OTA_NO_CARD;
+		uint64_t space = (uint64_t)vfs.f_bavail * (vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize);
+		if (space < (uint64_t)extras[k].size + SPACE_MARGIN) return OTA_NO_SPACE;
+		// Unique scratch path on the pinned SD filesystem, never a firmware filename.
+		char part[120];
+		int n = snprintf(part, sizeof(part), "%s/.sonix-extra-XXXXXX", root);
+		if (n <= 0 || (size_t)n >= sizeof(part)) return OTA_DOWNLOAD_FAILED;
+		int fd = mkstemp(part);
+		if (fd < 0) return OTA_DOWNLOAD_FAILED;
+		close(fd);
+		ota_result_t r = download_asset(extras[k].url, extras[k].size, extras[k].sha, part, done);
+		if (r == OTA_OK) {
+			sdpackages_result_t s = sdpackages_install_extra(root, k, part, release.tag, extras[k].sha,
+				package_cancel, NULL, NULL);
+			r = s == SDPACKAGES_OK ? OTA_OK : s == SDPACKAGES_CANCELLED ? OTA_CANCELLED :
+				s == SDPACKAGES_NO_SPACE ? OTA_NO_SPACE :
+				s == SDPACKAGES_INVALID || s == SDPACKAGES_CORRUPT ? OTA_CORRUPT : OTA_DOWNLOAD_FAILED;
+		}
+		unlink(part);
+		if (r != OTA_OK) return r;
+		done += extras[k].size;
+	}
+	return OTA_OK;
+}
+
 static ota_result_t do_download(void) {
+	if (!extras_mask) {
 	char digest[80];
 	snprintf(digest, sizeof(digest), "sha256:%s", release.sha256);
 	if (!ota_policy_digest(digest) || !ota_policy_asset(repo, stem, release.url, release.size)) return OTA_CHECK_FAILED;
 	if (release.packages_size) {
 		snprintf(digest, sizeof(digest), "sha256:%s", release.packages_sha256);
 		if (!ota_policy_digest(digest) || !ota_policy_package(repo, release.tag, release.packages_url, release.packages_size)) return OTA_CHECK_FAILED;
+	}
 	}
 	const char *mount_path = storage_sd_root();
 	if (!mount_path || !mount_path[0] || !storage_card_attached()) return OTA_NO_CARD;
@@ -479,7 +558,7 @@ static ota_result_t do_download(void) {
 		close(card);
 		return OTA_NO_CARD;
 	}
-	ota_result_t result = download_to_card(root, &vfs);
+	ota_result_t result = extras_mask ? download_extras_to_card(root) : download_to_card(root, &vfs);
 	close(card);
 	return result;
 }
@@ -529,6 +608,7 @@ static void *download_thread(void *unused) {
 }
 
 bool ota_download_start(void) {
+	if (extras_mask) return false;
 	if (!release_valid || !begin(OTA_DOWNLOADING)) {
 		return false;
 	}
@@ -543,5 +623,33 @@ bool ota_download_start(void) {
 		return true;
 	}
 	pthread_detach(thread);
+	return true;
+}
+
+static void *extras_thread(void *unused) {
+	(void)unused;
+	thread_be_background("extras download");
+	ota_result_t r = do_check();
+	if (r == OTA_OK && !cancelled()) {
+		pthread_mutex_lock(&lock);
+		state = OTA_DOWNLOADING;
+		pthread_mutex_unlock(&lock);
+		r = do_download();
+	} else if (cancelled()) r = OTA_CANCELLED;
+	finish(r);
+	return NULL;
+}
+
+bool ota_extras_start(unsigned mask) {
+	if (!mask || (mask & ~SD_EXTRAS_MASK) || !begin(OTA_CHECKING)) return false;
+	extras_mask = mask;
+	release_valid = false;
+	const char *r = sysinfo_ota_repo();
+	snprintf(repo, sizeof(repo), "%s", r && r[0] ? r : DEFAULT_REPO);
+	const char *s = firmware_update_stem();
+	snprintf(stem, sizeof(stem), "%s", s ? s : "");
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, extras_thread, NULL)) finish(OTA_CHECK_FAILED);
+	else pthread_detach(thread);
 	return true;
 }

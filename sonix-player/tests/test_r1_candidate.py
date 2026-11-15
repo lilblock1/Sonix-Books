@@ -43,6 +43,30 @@ class ImageTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 candidate.verify_images(folder)
 
+    def test_complete_container_inventory_detects_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ota_v0").mkdir()
+            (root / "ota_v0" / "ota_update.in").write_text("original")
+            original = candidate.container_inventory(root)
+            self.assertEqual(set(original), {"ota_v0/ota_update.in"})
+            (root / "extra.img").write_bytes(b"unexpected")
+            self.assertNotEqual(candidate.container_inventory(root), original)
+            (root / "extra.img").unlink()
+            (root / "ota_v0" / "ota_update.in").write_text("changed")
+            self.assertNotEqual(candidate.container_inventory(root), original)
+
+    def test_inventory_duplicate_report_does_not_remove_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "one").write_bytes(b"A" * 4096)
+            (root / "two").write_bytes(b"A" * 4096)
+            before = candidate.snapshot(root)
+            inventory = candidate.size_inventory(root, before)
+            self.assertEqual(inventory["regular_file_count"], 2)
+            self.assertEqual(inventory["duplicate_payload_groups"][0]["paths"], ["one", "two"])
+            self.assertEqual(candidate.snapshot(root), before)
+
     def test_host_elf_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             host = Path(temporary) / "host"

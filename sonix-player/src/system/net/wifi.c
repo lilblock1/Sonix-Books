@@ -59,9 +59,6 @@
 // they arrive as jobs and wake the thread immediately.
 #define STATUS_POLL_STANDBY_MS 10000
 
-// With the radio off there is nothing to ask anybody.
-#define IDLE_WAIT_MS 300000
-
 // How often the worker asks wpa_cli how things are going. Normally two
 // seconds; slowed right down while something is moving bulk data over the
 // radio, because every one of those polls is a fork of this whole process --
@@ -69,8 +66,7 @@
 // the transfer is not getting. The status bar's signal bars lag by a few
 // seconds while a transfer runs, and that is the whole cost.
 static bool g_poll_slow;
-
-void wifi_set_status_poll_slow(bool slow) { g_poll_slow = slow; }
+static bool g_settings_visible;
 
 // A DHCP attempt is not retried more often than this, so an access point that
 // hands out no lease does not turn into a fork loop.
@@ -150,6 +146,29 @@ static wifi_opkind_t g_opkind = WIFI_OPKIND_CONNECT;
 // wpa_supplicant has selected" and stays set for a while after the association
 // is gone. While this is up, nothing is current, whatever the saved list says.
 static bool link_dropped;
+
+void wifi_set_status_poll_slow(bool slow) {
+	pthread_mutex_lock(&lock);
+	g_poll_slow = slow;
+	pthread_cond_signal(&wake);
+	pthread_mutex_unlock(&lock);
+}
+
+void wifi_set_settings_visible(bool visible) {
+	pthread_mutex_lock(&lock);
+	g_settings_visible = visible;
+	pthread_cond_signal(&wake);
+	pthread_mutex_unlock(&lock);
+}
+
+// Called with lock held. Association and DHCP recovery retain the fast
+// interval, even outside the settings page. Bulk transfers keep their
+// existing slow mode, and stable links need no frequent signal-strength fork.
+static uint32_t status_poll_period_locked(void) {
+	if (g_poll_slow || !power_screen_is_on()) return STATUS_POLL_STANDBY_MS;
+	if (g_settings_visible || g_status.state != WIFI_STATE_CONNECTED || !g_status.ip[0]) return STATUS_POLL_MS;
+	return STATUS_POLL_STANDBY_MS;
+}
 
 // ---------------------------------------------------------------------------
 // running things
@@ -1294,12 +1313,16 @@ static void *wifi_worker(void *arg) {
 			// tv_sec: a two-second poll is 2,000,000,000 ns, and adding that
 			// straight to tv_nsec overflows a 32-bit long.
 			struct timespec deadline;
-			deadline_in_ms(&deadline, !g_enabled ? IDLE_WAIT_MS
-												 : (power_screen_is_on() ? STATUS_POLL_MS : STATUS_POLL_STANDBY_MS));
-			pthread_cond_timedwait(&wake, &lock, &deadline);
+			if (!g_enabled) {
+				pthread_cond_wait(&wake, &lock);
+			} else {
+				deadline_in_ms(&deadline, status_poll_period_locked());
+				pthread_cond_timedwait(&wake, &lock, &deadline);
+			}
 			have_job = take_job(&job);
 		}
 		bool enabled = g_enabled;
+		uint32_t poll_period = status_poll_period_locked();
 		pthread_mutex_unlock(&lock);
 
 		if (have_job) {
@@ -1317,7 +1340,9 @@ static void *wifi_worker(void *arg) {
 				pthread_mutex_unlock(&lock);
 				if (job.arg_int) {
 					poll_status();
-					do_scan();
+					// A transient restore only needs the saved association.
+					// The settings page requests its own discovery sweep.
+					if (job.arg_int == 1) do_scan();
 				}
 				break;
 
@@ -1350,8 +1375,6 @@ static void *wifi_worker(void *arg) {
 			continue;
 		}
 
-		uint32_t poll_period =
-			(power_screen_is_on() && !g_poll_slow) ? STATUS_POLL_MS : STATUS_POLL_STANDBY_MS;
 		if (enabled && (uint32_t)(now_ms() - last_poll) >= poll_period) {
 			last_poll = now_ms();
 			poll_status();
@@ -1422,7 +1445,7 @@ static void set_enabled(bool on, bool remember) {
 		config_save();
 	}
 
-	job_t job = {.type = JOB_POWER, .arg_int = on ? 1 : 0};
+	job_t job = {.type = JOB_POWER, .arg_int = on ? (remember ? 1 : 2) : 0};
 	post_job(&job);
 }
 

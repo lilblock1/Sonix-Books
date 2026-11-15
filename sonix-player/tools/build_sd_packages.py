@@ -15,15 +15,20 @@ MAX_FILES = 1024
 ASSET = "Sonix-Books-SD-Packages.spk"
 
 
-def safe_path(name):
+def safe_path(name, game=None):
     parts = name.split("/")
     return (len(name.encode("utf-8")) < 256 and len(parts) <= 16
-            and name.startswith(("Ebook/Fonts/", "Ebook/Dictionaries/", "Ebook/Tools/"))
+            and name.startswith('Games/' + game + '/' if game else ('Ebook/Fonts/', 'Ebook/Dictionaries/', 'Ebook/Tools/'))
             and all(part and not part.startswith(".") for part in parts)
             and not any(ord(c) < 32 or ord(c) > 126 or c in "\\:" for c in name))
 
 
-def build(version, archives, output, require_r1=True, component=None):
+def build(version, archives, output, require_r1=True, component=None, game=None):
+    if game is not None:
+        if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?', game) or component is not None or require_r1:
+            raise ValueError('Invalid game scope')
+        if not re.fullmatch(r'v(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})', version):
+            raise ValueError('Invalid game version')
     if component is not None and component not in ('Fonts', 'Dictionaries', 'Tools'):
         raise ValueError('Unknown component')
     if not re.fullmatch(r"(?:v|[0-9])[A-Za-z0-9.-]{0,39}", version) or ".." in version:
@@ -40,11 +45,14 @@ def build(version, archives, output, require_r1=True, component=None):
                     if info.is_dir():
                         continue
                     name = info.filename
-                    if not name.startswith("Ebook/"):
+                    if game:
+                        if not name.startswith('Games/' + game + '/'):
+                            raise ValueError('Wrong game scope: ' + name)
+                    elif not name.startswith("Ebook/"):
                         continue  # artifact wrappers may carry reports beside the pack
                     if component and not name.startswith('Ebook/' + component + '/'):
                         raise ValueError('Wrong component member: ' + name)
-                    if not safe_path(name) or name.casefold() in names or info.file_size > MAX_FILE:
+                    if not safe_path(name, game) or name.casefold() in names or info.file_size > MAX_FILE:
                         raise ValueError("invalid or duplicate package member: " + name)
                     mode = info.external_attr >> 16
                     if mode & 0o170000 == 0o120000:
@@ -106,10 +114,11 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, default=Path(ASSET))
     parser.add_argument("--component", choices=('Fonts', 'Dictionaries', 'Tools'))
+    parser.add_argument("--game", help='Scope for an independently published game package')
     parser.add_argument("archives", type=Path, nargs="+")
     args = parser.parse_args()
     print(json.dumps(build(args.version, args.archives, args.output,
-                           require_r1=args.component in (None, 'Tools'), component=args.component), indent=2))
+                           require_r1=args.game is None and args.component in (None, 'Tools'), component=args.component, game=args.game), indent=2))
 
 
 if __name__ == "__main__":

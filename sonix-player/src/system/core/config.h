@@ -68,6 +68,17 @@ void config_store_set(config_store_t *store, const char *section, const char *ke
 void config_store_set_int(config_store_t *store, const char *section, const char *key, long value);
 bool config_store_save(config_store_t *store);
 
+// Apply a bounded group of changes and save once. NULL values remove keys.
+// Failure leaves the in-memory store unchanged (including on a full table or
+// failed atomic file replacement). Strings must fit without truncation.
+typedef struct { const char *key; const char *value; } config_change_t;
+typedef enum {
+	CONFIG_APPLY_OK, CONFIG_APPLY_INVALID, CONFIG_APPLY_FULL,
+	CONFIG_APPLY_MEMORY, CONFIG_APPLY_IO
+} config_apply_result_t;
+config_apply_result_t config_store_apply(config_store_t *store, const char *section,
+	const config_change_t *changes, unsigned count);
+
 // Moves every key of `section` from one store to the other and returns how many
 // moved. What carries a player updated in place over to the split above,
 // instead of silently resetting every book it had open.

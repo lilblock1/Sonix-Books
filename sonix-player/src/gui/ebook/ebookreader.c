@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "src/system/ebook/bookmarks.h"
+#include "src/gui/ebook/ebookmarkedit.h"
 #include "src/system/ebook/ebook.h"
 #include "src/system/ebook/ebookhistory.h"
 #include "src/system/ebook/ebookprogress.h"
@@ -686,10 +687,10 @@ static void lay_out_rows(lv_obj_t *box, uint32_t block, uint32_t offset, uint32_
 // its side or moved in its cell follows what the font's own vertical forms do:
 //
 //   - Latin letters, digits and the dashes and dots that run along a line
-//     (ー, …, ―, 〜) are turned a quarter clockwise;
+//     (?, ., ?, ?) are turned a quarter clockwise;
 //   - brackets use their vertical presentation forms (U+FE35 and on) when the
 //     face has them, and are turned when it does not;
-//   - 、。，． move to the top right of their cell, small kana a little up and
+//   - ??,. move to the top right of their cell, small kana a little up and
 //     to the right.
 //
 // The position is the same block and byte offset the horizontal pages keep,
@@ -791,41 +792,41 @@ static uint32_t utf8_take(const char *text, uint32_t len, uint32_t *at) {
 // The presentation form a bracket takes in a column, or 0.
 static uint32_t vertical_form(uint32_t cp) {
 	switch (cp) {
-	case 0x300C: // 「
+	case 0x300C: // ?
 		return 0xFE41;
-	case 0x300D: // 」
+	case 0x300D: // ?
 		return 0xFE42;
-	case 0x300E: // 『
+	case 0x300E: // ?
 		return 0xFE43;
-	case 0x300F: // 』
+	case 0x300F: // ?
 		return 0xFE44;
-	case 0xFF08: // （
+	case 0xFF08: // (
 		return 0xFE35;
-	case 0xFF09: // ）
+	case 0xFF09: // )
 		return 0xFE36;
-	case 0xFF5B: // ｛
+	case 0xFF5B: // {
 		return 0xFE37;
-	case 0xFF5D: // ｝
+	case 0xFF5D: // }
 		return 0xFE38;
-	case 0x3014: // 〔
+	case 0x3014: // ?
 		return 0xFE39;
-	case 0x3015: // 〕
+	case 0x3015: // ?
 		return 0xFE3A;
-	case 0x3010: // 【
+	case 0x3010: // ?
 		return 0xFE3B;
-	case 0x3011: // 】
+	case 0x3011: // ?
 		return 0xFE3C;
-	case 0x300A: // 《
+	case 0x300A: // �
 		return 0xFE3D;
-	case 0x300B: // 》
+	case 0x300B: // �
 		return 0xFE3E;
-	case 0x3008: // 〈
+	case 0x3008: // <
 		return 0xFE3F;
-	case 0x3009: // 〉
+	case 0x3009: // >
 		return 0xFE40;
-	case 0xFF3B: // ［
+	case 0xFF3B: // [
 		return 0xFE47;
-	case 0xFF3D: // ］
+	case 0xFF3D: // ]
 		return 0xFE48;
 	default:
 		return 0;
@@ -844,21 +845,21 @@ static bool turns_sideways(uint32_t cp) {
 	case 0x2013:
 	case 0x2014:
 	case 0x2015:
-	case 0x2025: // ‥
-	case 0x2026: // …
+	case 0x2025: // ?
+	case 0x2026: // .
 	case 0x2E3A: // two- and three-em dash
 	case 0x2E3B:
-	case 0x301C: // 〜
-	case 0x3030: // 〰
-	case 0x30FC: // ー
-	case 0xFF0D: // －
-	case 0xFF1A: // ：
-	case 0xFF1B: // ；
-	case 0xFF1C: // ＜
-	case 0xFF1D: // ＝
-	case 0xFF1E: // ＞
-	case 0xFF3F: // ＿
-	case 0xFF5E: // ～
+	case 0x301C: // ?
+	case 0x3030: // ?
+	case 0x30FC: // ?
+	case 0xFF0D: // -
+	case 0xFF1A: // :
+	case 0xFF1B: // ;
+	case 0xFF1C: // <
+	case 0xFF1D: // =
+	case 0xFF1E: // >
+	case 0xFF3F: // _
+	case 0xFF5E: // ~
 		return true;
 	default:
 		return false;
@@ -869,13 +870,13 @@ static bool turns_sideways(uint32_t cp) {
 // horizontal glyph sits. The offsets are Rodin's own vertical forms.
 static bool corner_shift(uint32_t cp, int *dx, int *dy) {
 	switch (cp) {
-	case 0x3001: // 、
-	case 0x3002: // 。
+	case 0x3001: // ?
+	case 0x3002: // ?
 		*dx = 650;
 		*dy = -680;
 		return true;
-	case 0xFF0C: // ，
-	case 0xFF0E: // ．
+	case 0xFF0C: // ,
+	case 0xFF0E: // .
 		*dx = 760;
 		*dy = -690;
 		return true;
@@ -1821,14 +1822,17 @@ static void save_bookmark(void) {
 	if (!book) {
 		return;
 	}
-	char text[BOOKMARK_TEXT_MAX];
-	page_snippet(text, sizeof(text));
-	if (bookmark_add(ebook_path(book), ebook_chapter_index(book), page_block, page_offset, text)) {
+	bookmark_t mark = {.spine = ebook_chapter_index(book), .block = page_block, .offset = page_offset};
+	page_snippet(mark.text, sizeof(mark.text));
+	bookmark_result_t result = bookmark_save(ebook_path(book), -1, &mark);
+	if (result == BOOKMARK_OK) {
 		toast_glyph(&icon_bookmark_check, "ebookreader_bookmark_saved");
-	} else {
-		// Already there, or the book is full. Saying so is better than a tap
-		// that looks like it did nothing.
+	} else if (result == BOOKMARK_DUPLICATE) {
 		toast_plain("ebookreader_bookmark_duplicate");
+	} else {
+		gui_notify_popup(result == BOOKMARK_FULL ? "This book has 64 bookmarks. Delete one first." :
+			result == BOOKMARK_STORAGE_FULL ? "Bookmark storage is full. Delete an unused bookmark and try again." :
+			"Could not save this bookmark. Please try again.");
 	}
 }
 
@@ -2054,6 +2058,10 @@ bool ebookreader_key(gui_key_t key) {
 		return false;
 	}
 	if (ebookfind_key(key)) return true;
+	if (ebookmarkedit_active(ebookreader_screen)) {
+		if (key == GUI_KEY_PLAY_PAUSE) ebookmarkedit_abort(ebookreader_screen);
+		return true;
+	}
 	bool menu_visible = menu_veil && !lv_obj_is_hidden(menu_veil);
 	if (key == GUI_KEY_PLAY_PAUSE) {
 		if (menu_visible) {
@@ -2185,6 +2193,23 @@ static void find_open_cb(lv_event_t *e) {
 	ebook_close_chapter(book);
 	ebookfind_open(ebook_path(book), search_origin);
 	search_suspending = false;
+}
+
+static void bookmark_saved(void) {
+	toast_glyph(&icon_bookmark_check, "ebookreader_bookmark_saved");
+}
+
+static void bookmark_edit_cb(lv_event_t *e) {
+	(void)e;
+	if (!book || !ebook_chapter_loaded(book)) return;
+	bookmark_t mark = {.spine = ebook_chapter_index(book), .block = page_block, .offset = page_offset};
+	int index = bookmark_find(ebook_path(book), mark.spine, mark.block, mark.offset);
+	if (index >= 0) {
+		if (!bookmark_get(ebook_path(book), index, &mark)) return;
+	} else page_snippet(mark.text, sizeof(mark.text));
+	menu_close();
+	if (!ebookmarkedit_open(g_cfg, ebookreader_screen, ebook_path(book), index, &mark, bookmark_saved))
+		gui_notify_popup("Could not open this bookmark.");
 }
 
 // ---------------------------------------------------------------------------
@@ -2421,7 +2446,7 @@ static void stepper_row(lv_obj_t *parent, int which) {
 	lv_obj_t *pills = NULL;
 	settingsrow_pills(parent, stepper_tags[which], &pills);
 
-	stepper_button(pills, "−", which, false);
+	stepper_button(pills, "-", which, false);
 
 	lv_obj_t *value = lv_label_create(pills);
 	lv_label_set_text(value, "0");
@@ -2742,6 +2767,8 @@ static void build_menu(gui_config_t *cfg) {
 
 	lv_obj_t *find_row = settingsrow_action(menu_bar, "Find in book", find_open_cb, NULL);
 	lv_obj_set_height(find_row, 60);
+	lv_obj_t *bookmark_row = settingsrow_action(menu_bar, "Bookmark / note", bookmark_edit_cb, NULL);
+	lv_obj_set_height(bookmark_row, 60);
 
 	// Leaving sits in its own row underneath the reading tools.
 	lv_obj_t *close_row = lv_btn_create(menu_bar);
@@ -2842,6 +2869,7 @@ static void reader_unloaded_cb(lv_event_t *e) {
 	(void)e;
 	readingkeys_leave();
 	ebookfind_abort();
+	ebookmarkedit_abort(ebookreader_screen);
 	back_btn_force_hidden(false);
 	topbar_set_hidden(false);
 

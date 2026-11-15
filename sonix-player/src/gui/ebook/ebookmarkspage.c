@@ -12,6 +12,7 @@
 #include "src/gui/nowplaying/cover.h"
 #include "src/gui/ebook/ebookcovers.h"
 #include "src/gui/ebook/ebookreader.h"
+#include "src/gui/ebook/ebookmarkedit.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/nowplaying/player.h"
@@ -112,7 +113,16 @@ static void delete_mark_action(void *user) {
 	if (bookmark_remove(open_book_path, menu_mark)) {
 		toast_plain("ebookmarks_bookmark_deleted");
 		build_marks();
+	} else {
+		gui_notify_popup("Could not delete this bookmark. Nothing was changed.");
 	}
+}
+
+static void edit_mark_action(void *user) {
+	(void)user;
+	bookmark_t mark;
+	if (bookmark_get(open_book_path, menu_mark, &mark))
+		ebookmarkedit_open(g_cfg, ebookmarkbookpage_screen, open_book_path, menu_mark, &mark, build_marks);
 }
 
 static void mark_long_pressed_cb(lv_event_t *e) {
@@ -121,8 +131,11 @@ static void mark_long_pressed_cb(lv_event_t *e) {
 	}
 	menu_mark = (int)(intptr_t)lv_event_get_user_data(e);
 	swallow_next_click = true;
-	static const popover_item_t items[] = {{"ebookmarks_delete_bookmark", delete_mark_action, NULL, false}};
-	popover_show(lv_event_get_current_target(e), items, 1);
+	static const popover_item_t items[] = {
+		{"Edit name / note", edit_mark_action, NULL, false},
+		{"ebookmarks_delete_bookmark", delete_mark_action, NULL, false}
+	};
+	popover_show(lv_event_get_current_target(e), items, 2);
 }
 
 static void build_marks(void) {
@@ -132,6 +145,12 @@ static void build_marks(void) {
 	}
 
 	int count = bookmark_count(open_book_path);
+	if (!count) {
+		lv_obj_t *empty = lv_label_create(marks_list);
+		lv_label_set_text(empty, "No bookmarks in this book.");
+		lv_obj_add_style(empty, &theme_style_text_dim, 0);
+		lv_obj_set_style_text_font(empty, &font_ui_20, 0);
+	}
 	for (int i = 0; i < count; i++) {
 		bookmark_t bm;
 		if (!bookmark_get(open_book_path, i, &bm)) {
@@ -154,6 +173,15 @@ static void build_marks(void) {
 		lv_obj_add_event_cb(row, mark_pick_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 		lv_obj_add_event_cb(row, mark_long_pressed_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
 
+		if (bm.name[0]) {
+			lv_obj_t *name = lv_label_create(row);
+			lv_obj_set_width(name, lv_pct(100));
+			lv_label_set_long_mode(name, LV_LABEL_LONG_WRAP);
+			lv_label_set_text(name, bm.name);
+			lv_obj_add_style(name, &theme_style_text, 0);
+			lv_obj_set_style_text_font(name, &font_ui_24, 0);
+			lv_obj_set_event_bubble(name, true);
+		}
 		// The line of the book that was on screen. It is what makes the list
 		// readable as places rather than as numbers, so it goes first and gets
 		// the room; a mark with no text falls back to the chapter alone.
@@ -165,6 +193,16 @@ static void build_marks(void) {
 			lv_obj_add_style(text, &theme_style_text, 0);
 			lv_obj_set_style_text_font(text, &font_ui_20, 0);
 			lv_obj_set_event_bubble(text, true);
+		}
+
+		if (bm.note[0]) {
+			lv_obj_t *note = lv_label_create(row);
+			lv_obj_set_width(note, lv_pct(100));
+			lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+			lv_label_set_text(note, bm.note);
+			lv_obj_add_style(note, &theme_style_text_dim, 0);
+			lv_obj_set_style_text_font(note, &font_ui_20, 0);
+			lv_obj_set_event_bubble(note, true);
 		}
 
 		lv_obj_t *where = lv_label_create(row);
@@ -182,6 +220,13 @@ static void build_marks(void) {
 static void marks_loaded_cb(lv_event_t *e) {
 	(void)e;
 	build_marks();
+}
+
+static void marks_unloaded_cb(lv_event_t *e) {
+	(void)e;
+	ebookmarkedit_abort(ebookmarkbookpage_screen);
+	swallow_next_click = false;
+	popover_close();
 }
 
 static void open_book_cb(lv_event_t *e) {
@@ -456,6 +501,7 @@ void ebookmarkspage_init(gui_config_t *cfg) {
 	// reader is an arrival too, and a bookmark saved in between has to be in
 	// the list.
 	lv_obj_add_event_cb(ebookmarkbookpage_screen, marks_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+	lv_obj_add_event_cb(ebookmarkbookpage_screen, marks_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);
 	switcher_attach_back_gesture(ebookmarkbookpage_screen);
 	switcher_attach_back_gesture(book_container);
 	player_sheet_attach_drag(book_container, true);

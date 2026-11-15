@@ -77,6 +77,13 @@ jobs:
           fixture=$(mktemp -d)
           trap 'rm -rf -- "$fixture"' EXIT
           ./build_tests/test_ebookrecents "$fixture"
+      - name: Test named bookmarks, notes and atomic saves
+        working-directory: sonix-player
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I. \
+            tests/test_bookmarknotes.c src/system/ebook/bookmarks.c src/system/core/config.c \
+            -o build_tests/test_bookmarknotes
+          ./build_tests/test_bookmarknotes
       - name: Test library search, folders, sorting and metadata cache
         working-directory: sonix-player
         run: |

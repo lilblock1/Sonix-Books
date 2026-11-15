@@ -35,12 +35,16 @@
 // The snippet is cut to fit a config value (128 bytes) with the position and
 // the separator in front of it.
 #define BOOKMARK_TEXT_MAX 96
+#define BOOKMARK_NAME_MAX 49
+#define BOOKMARK_NOTE_MAX 241
 
 typedef struct {
 	uint32_t spine;
 	uint32_t block;
 	uint32_t offset;
 	char text[BOOKMARK_TEXT_MAX];
+	char name[BOOKMARK_NAME_MAX];
+	char note[BOOKMARK_NOTE_MAX];
 } bookmark_t;
 
 // The key a book is known by: the FNV-1a of its path, as sixteen hex digits.
@@ -60,5 +64,18 @@ bool bookmark_add(const char *book_path, uint32_t spine, uint32_t block, uint32_
 
 // Removes the one at `index`, closing the gap so the numbering stays dense.
 bool bookmark_remove(const char *book_path, int index);
+
+typedef enum {
+	BOOKMARK_OK, BOOKMARK_INVALID, BOOKMARK_FULL, BOOKMARK_DUPLICATE,
+	BOOKMARK_STORAGE_FULL, BOOKMARK_SAVE_FAILED
+} bookmark_result_t;
+
+// UI-thread operations. Index -1 adds a new mark; an existing index edits
+// its name/note without changing the position. Text limits are UTF-8 bytes,
+// including the terminator. Names are single-line; notes may have newlines.
+// Metadata is hex encoded in separate keys. The legacy position/snippet key
+// stays readable by older firmware. Missing metadata means an unnamed mark.
+bookmark_result_t bookmark_save(const char *book_path, int index, const bookmark_t *mark);
+int bookmark_find(const char *book_path, uint32_t spine, uint32_t block, uint32_t offset);
 
 #endif /* EBOOK_BOOKMARKS_H */

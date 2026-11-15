@@ -300,3 +300,49 @@ bool config_store_save(config_store_t *store) {
 }
 
 bool config_save(void) { return config_store_save(&g_main); }
+
+config_apply_result_t config_store_apply(config_store_t *store, const char *section,
+	const config_change_t *changes, unsigned count) {
+	if (!store || !store->path[0] || !section || !section[0] ||
+		strlen(section) >= CONFIG_SECTION_LEN || (!changes && count) ||
+		count > (unsigned)store->capacity) return CONFIG_APPLY_INVALID;
+	int final_count = store->count;
+	for (unsigned i = 0; i < count; i++) {
+		const char *key = changes[i].key, *value = changes[i].value;
+		if (!key || !key[0] || strlen(key) >= CONFIG_KEY_LEN ||
+			strpbrk(key, "=\r\n") || (value && (strlen(value) >= CONFIG_VALUE_LEN ||
+			strpbrk(value, "\r\n")))) return CONFIG_APPLY_INVALID;
+		for (unsigned j = 0; j < i; j++)
+			if (!strcmp(key, changes[j].key)) return CONFIG_APPLY_INVALID;
+		bool exists = find(store, section, key) != NULL;
+		if (value && !exists) final_count++;
+		if (!value && exists) final_count--;
+	}
+	if (final_count > store->capacity) return CONFIG_APPLY_FULL;
+	size_t bytes = (size_t)store->count * sizeof(*store->entries);
+	config_entry_t *backup = malloc(bytes ? bytes : 1);
+	if (!backup) return CONFIG_APPLY_MEMORY;
+	memcpy(backup, store->entries, bytes);
+	int previous_count = store->count;
+	bool previous_dirty = store->dirty;
+	// Remove first so a full store can replace keys in one transaction.
+	for (unsigned i = 0; i < count; i++) {
+		if (changes[i].value) continue;
+		config_entry_t *entry = find(store, section, changes[i].key);
+		if (!entry) continue;
+		int at = (int)(entry - store->entries);
+		memmove(entry, entry + 1, (size_t)(store->count - at - 1) * sizeof(*entry));
+		store->count--;
+		store->dirty = true;
+	}
+	for (unsigned i = 0; i < count; i++)
+		if (changes[i].value) config_store_set(store, section, changes[i].key, changes[i].value);
+	bool saved = config_store_save(store);
+	if (!saved) {
+		memcpy(store->entries, backup, bytes);
+		store->count = previous_count;
+		store->dirty = previous_dirty;
+	}
+	free(backup);
+	return saved ? CONFIG_APPLY_OK : CONFIG_APPLY_IO;
+}

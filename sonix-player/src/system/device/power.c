@@ -740,6 +740,23 @@ static bool wifi_wanted(void) {
 // so that a pause somebody is about to undo does not cost a reassociation.
 static uint32_t g_wifi_idle_since;
 static uint32_t g_bt_idle_since;
+static bool g_offline_reading;
+static bool g_reader_wifi_parked;
+
+void power_set_offline_reading(bool active) {
+	if (g_offline_reading == active) return;
+	g_offline_reading = active;
+	g_wifi_idle_since = lv_tick_get();
+	// Restore only a radio that was parked for this reading session. Leave
+	// the normal dark-screen standby behavior in charge otherwise.
+	if (!active && g_reader_wifi_parked && g_screen_on) {
+		g_reader_wifi_parked = false;
+		if (g_wifi_parked) {
+			g_wifi_parked = false;
+			if (config_get_int("wireless", "wifi", 0)) wifi_set_enabled_transient(true);
+		}
+	}
+}
 
 static void park_radios_if_idle(uint32_t now) {
 	// Held at now for as long as there is a reason to keep them, so `since`
@@ -747,10 +764,24 @@ static void park_radios_if_idle(uint32_t now) {
 	if (g_screen_on || bluetooth_in_use()) {
 		g_bt_idle_since = now;
 	}
-	if (g_screen_on || wifi_wanted()) {
+	// Never touch the shared Wi-Fi/BT chip while Bluetooth is enabled
+	// during a visible reading session, even if it has no connected peer.
+	bool reader_idle = g_screen_on && g_offline_reading && !bluetooth_get_enabled() && !bluetooth_busy();
+	if ((g_screen_on && !reader_idle) || wifi_wanted()) {
 		g_wifi_idle_since = now;
 	}
 	if (g_screen_on) {
+		if (g_reader_wifi_parked && wifi_get_enabled()) {
+			// Explicitly turning Wi-Fi on wins over the reader's idle park.
+			g_reader_wifi_parked = false;
+			g_wifi_parked = false;
+			g_wifi_idle_since = now;
+		}
+		if (reader_idle && !g_wifi_parked && wifi_get_enabled() &&
+			since(g_wifi_idle_since, now) >= g_radio_park_after_ms) {
+			g_reader_wifi_parked = true;
+			park_wifi_now();
+		}
 		return;
 	}
 
@@ -776,8 +807,11 @@ static void park_radios_if_idle(uint32_t now) {
 static void unpark_radios(void) {
 	if (g_wifi_parked) {
 		g_wifi_parked = false;
-		printf("power: Wi-Fi back on\n");
-		wifi_set_enabled_transient(true);
+		g_reader_wifi_parked = false;
+		if (config_get_int("wireless", "wifi", 0)) {
+			printf("power: Wi-Fi back on\n");
+			wifi_set_enabled_transient(true);
+		}
 	}
 	if (g_bt_parked) {
 		g_bt_parked = false;

@@ -52,7 +52,7 @@ static action_fn button_actions[BUTTONS];
 static lv_timer_t *poll_timer;
 static bool holding_screen;
 
-static enum { PHASE_NONE, PHASE_CHECK, PHASE_DOWNLOAD, PHASE_EXTRAS } phase;
+static enum { PHASE_NONE, PHASE_CHECK, PHASE_DOWNLOAD, PHASE_EXTRAS, PHASE_STORE_CHECK, PHASE_STORE_DOWNLOAD } phase;
 static lv_obj_t *extra_switch[SD_EXTRAS_COUNT], *extras_auto_switch;
 static const char *const EXTRA_LABELS[SD_EXTRAS_COUNT] = {"Reading fonts", "Offline dictionary", "Document formats"};
 
@@ -458,6 +458,7 @@ static void render_notes(const char *md) {
 
 static void show_choice(void);
 static void poll_cb(lv_timer_t *timer);
+static void show_game_catalog(void);
 
 static void start_polling(void) {
 	if (!poll_timer) {
@@ -634,8 +635,9 @@ static void download_finished(ota_result_t r) {
 static void poll_cb(lv_timer_t *timer) {
 	(void)timer;
 	ota_state_t s = ota_state();
-	if (s == OTA_DOWNLOADING && (phase == PHASE_DOWNLOAD || phase == PHASE_EXTRAS)) {
+	if (s == OTA_DOWNLOADING && (phase == PHASE_DOWNLOAD || phase == PHASE_EXTRAS || phase == PHASE_STORE_DOWNLOAD)) {
 		if (phase == PHASE_EXTRAS) layout("Downloadable Extras", "Downloading and verifying", false, true);
+		if (phase == PHASE_STORE_DOWNLOAD) layout("Game Store", "Downloading and verifying", false, true);
 		show_progress();
 		return;
 	}
@@ -661,6 +663,15 @@ static void poll_cb(lv_timer_t *timer) {
 			r == OTA_CANCELLED ? "Download cancelled" : tr("system_update_download_failed");
 		show_notice(message);
 		lv_label_set_text(title_label, "Downloadable Extras");
+	} else if (finished == PHASE_STORE_CHECK || finished == PHASE_STORE_DOWNLOAD) {
+		if (r == OTA_OK) { show_game_catalog(); return; }
+		const char *message = r == OTA_NO_NETWORK ? tr("system_update_no_wifi") : r == OTA_NO_CARD ? tr("system_no_card") :
+			r == OTA_NO_SPACE ? tr("system_update_no_space") : r == OTA_CORRUPT ? tr("system_update_corrupt") :
+			r == OTA_CANCELLED ? "Cancelled" : r == OTA_UP_TO_DATE ? "A newer version is already installed." :
+			finished == PHASE_STORE_CHECK ? "Game Store unavailable. Check Wi-Fi and try again." : tr("system_update_download_failed");
+		show_notice(message);
+		lv_label_set_text(title_label, "Game Store");
+		set_button(1, "Retry store", false, fwupdate_show_game_store);
 	}
 }
 
@@ -806,4 +817,58 @@ void fwupdate_show_extras(void) {
 	if (automatic && missing && storage_card_attached() && storage_sd_writable() &&
 		wifi_get_enabled() && wifi_interface_address(ip, sizeof(ip)))
 		start_extras_download(missing);
+}
+
+static void store_download_clicked(lv_event_t *e) {
+	unsigned i=(unsigned)(uintptr_t)lv_event_get_user_data(e);
+	if (!storage_card_attached() || !storage_sd_writable()) { lv_label_set_text(message_label,"Insert a writable microSD card."); return; }
+	if (!ota_store_download_start(i)) { lv_label_set_text(message_label,tr("system_update_busy")); return; }
+	phase=PHASE_STORE_DOWNLOAD;
+	layout("Game Store","Downloading and verifying package...",false,true);
+	lv_bar_set_value(bar,0,LV_ANIM_OFF);
+	set_button(0,"cancel",false,cancel_running);
+	hide_buttons(1);
+	start_polling();
+}
+
+static void show_game_catalog(void) {
+	size_t count=ota_store_count();
+	layout("Game Store",count?"Select a game or emulator to install or update on microSD.":"No packages published yet.",count>0,false);
+	lv_obj_clean(notes_content);
+	for (unsigned i=0;i<count;++i) {
+		const game_store_item_t *item=ota_store_item(i);
+		if (!item) continue;
+		char name[SD_GAME_ID_MAX], version[SDPACKAGES_VERSION], generation[SDPACKAGES_VERSION], size[32], line[160];
+		memcpy(name,item->id,strlen(item->id)+1);
+		for (unsigned j=0;name[j];++j) {
+			if(name[j]=='-') name[j]=' ';
+			else if((j==0 || name[j-1]==' ') && name[j]>='a' && name[j]<='z') name[j]-='a'-'A';
+		}
+		bool installed=storage_card_attached() && sdpackages_game_generation(storage_sd_root(),item->id,generation,version);
+		int compare=installed?game_store_version_cmp(item->version,version):1;
+		sysinfo_format_size((uint64_t)item->size,size,sizeof(size));
+		snprintf(line,sizeof(line),"%s  %s  (%s)",name,item->version,size);
+		if(compare>0) settingsrow_action(notes_content,line,store_download_clicked,(void *)(uintptr_t)i);
+		else notes_text_label(notes_content,line,&font_ui_22_bold);
+		notes_text_label(notes_content,!installed?"Install":compare>0?"Update available":"Installed / up to date",&font_ui_20);
+	}
+	if(count) fit_notes();
+	set_button(0,"Refresh store",true,fwupdate_show_game_store);
+	set_button(1,"back",false,close_card);
+	hide_buttons(2);
+}
+
+void fwupdate_show_game_store(void) {
+	if(ota_busy()) { gui_notify_popup("system_update_busy"); return; }
+	if(!veil) build();
+	phase=PHASE_NONE;
+	lv_obj_set_hidden(veil,false);
+	lv_obj_move_foreground(veil);
+	if(!holding_screen) { holding_screen=true; power_hold_screen_on(true); }
+	if(!ota_store_check_start()) { show_notice(tr("system_update_busy")); return; }
+	phase=PHASE_STORE_CHECK;
+	layout("Game Store","Connecting to GitHub...",false,false);
+	set_button(0,"cancel",false,cancel_running);
+	hide_buttons(1);
+	start_polling();
 }

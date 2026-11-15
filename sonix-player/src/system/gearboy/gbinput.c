@@ -1,4 +1,5 @@
 #include "gbinput.h"
+#include <stddef.h>
 
 #ifndef GB_CORE
 #define GB_CORE 0

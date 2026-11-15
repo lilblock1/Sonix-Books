@@ -109,6 +109,31 @@ def snapshot(root):
     return result
 
 
+def size_inventory(root, entries):
+    """Report-only: duplicate payloads are not proof a pathname is unused."""
+    by_digest = {}
+    areas = {}
+    files = []
+    for name, entry in entries.items():
+        if entry[0] != "file":
+            continue
+        size = (root / name).stat().st_size
+        files.append((size, name))
+        area = "/".join(Path(name).parts[:2])
+        areas[area] = areas.get(area, 0) + size
+        if size >= 4096:
+            by_digest.setdefault((entry[1], size), []).append(name)
+    duplicates = [{"bytes_each": size, "paths": sorted(names)}
+                  for (_, size), names in by_digest.items() if len(names) > 1]
+    duplicates.sort(key=lambda item: (-item["bytes_each"] * (len(item["paths"]) - 1), item["paths"]))
+    return {"regular_file_bytes": sum(size for size, _ in files),
+            "regular_file_count": len(files),
+            "bytes_by_area": dict(sorted(areas.items())),
+            "largest_files": [{"path": name, "bytes": size} for size, name in sorted(files, reverse=True)[:40]],
+            "duplicate_payload_groups": duplicates[:40],
+            "duplicate_note": "Logical sizes only; SquashFS may already deduplicate data. No files removed."}
+
+
 def check_elf(path):
     data = path.read_bytes()
     require(len(data) >= 52 and data[:6] == b"\x7fELF\x01\x01", "Player must be ELF32 little-endian")
@@ -140,6 +165,7 @@ def build(base, player, repository, output):
                 "Base rootfs identity/version does not match")
         before = snapshot(root)
         binary = root / "usr/bin/sonix_player"
+        base_player_bytes = binary.stat().st_size
         shutil.copyfile(player, binary)
         binary.chmod(0o755)
         resources = repository / "sonix-packer/assets/R1/usr/resource/sonix"
@@ -166,6 +192,11 @@ def build(base, player, repository, output):
         changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
         allowed = {"usr/bin/sonix_player", INFO} | language_changes
         require(set(changed) <= allowed, "An unexpected system file changed")
+        removed = sorted(before.keys() - after.keys())
+        require(not removed, "Debloating must not delete files from the pinned system image")
+        report.update(base_player_bytes=base_player_bytes, player_bytes=binary.stat().st_size,
+                      removed_system_files=removed, rootfs_inventory=size_inventory(root, after))
+        (output / "r1-build-report.json").write_text(json.dumps(report, indent=2) + "\n")
         # No kernel, module, boot script, system-library or flash-layout overlay.
         new_rootfs = work / "new.squashfs"
         # Same LZO format and block size as the base; spend more build CPU on

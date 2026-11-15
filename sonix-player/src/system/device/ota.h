@@ -37,6 +37,7 @@ typedef enum {
 	OTA_DOWNLOAD_FAILED, // the connection failed or ended early, or the card refused a write
 	OTA_CORRUPT,		 // the file arrived whole but its size or SHA-256 does not match the release
 	OTA_CANCELLED,
+	OTA_EXTRAS_UNAVAILABLE,
 } ota_result_t;
 
 // The longest description kept, in bytes. GitHub allows 125,000 characters;
@@ -59,6 +60,8 @@ typedef struct {
 // Starts looking for a release. False when a check or a download is already
 // running.
 bool ota_check_start(void);
+// Downloads and installs only selected extras for the installed firmware. No .upt.
+bool ota_extras_start(unsigned mask);
 
 bool ota_test_channel(void);
 bool ota_set_test_channel(bool enabled);

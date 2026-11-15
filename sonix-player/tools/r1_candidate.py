@@ -134,6 +134,26 @@ def size_inventory(root, entries):
             "duplicate_note": "Logical sizes only; SquashFS may already deduplicate data. No files removed."}
 
 
+def container_inventory(root):
+    # Compare extracted OTA payload names and contents, not ISO permissions.
+    return {name: entry[:2] for name, entry in snapshot(root).items()
+            if entry[0] in ("file", "link")}
+
+
+def check_runtime_links(player, original, root):
+    def interpreter(path):
+        out = subprocess.check_output(["readelf", "-lW", str(path)], text=True)
+        return re.findall(r"\[Requesting program interpreter: ([^\]]+)\]", out)
+    def needed(path):
+        out = subprocess.check_output(["readelf", "-dW", str(path)], text=True)
+        return set(re.findall(r"\(NEEDED\).*?\[([^\]]+)\]", out))
+    require(interpreter(player) == interpreter(original), "Player dynamic loader differs from the pinned R1")
+    old, new = needed(original), needed(player)
+    available = {p.name for p in root.rglob("*") if p.is_file() or p.is_symlink()}
+    require(new - old <= available, "New shared library absent from the pinned R1: " + str(sorted(new - old - available)))
+    return sorted(new)
+
+
 def check_elf(path):
     data = path.read_bytes()
     require(len(data) >= 52 and data[:6] == b"\x7fELF\x01\x01", "Player must be ELF32 little-endian")
@@ -166,6 +186,8 @@ def build(base, player, repository, output):
         before = snapshot(root)
         binary = root / "usr/bin/sonix_player"
         base_player_bytes = binary.stat().st_size
+        report["player_needed_libraries"] = check_runtime_links(player, binary, root)
+        report["dynamic_loader_matches_base"] = True
         shutil.copyfile(player, binary)
         binary.chmod(0o755)
         resources = repository / "sonix-packer/assets/R1/usr/resource/sonix"
@@ -232,12 +254,15 @@ def build(base, player, repository, output):
         # Keep an unverified container out of the artifact directory even if
         # the final re-read fails.
         image = work / "r1.upt"
+        expected_container = container_inventory(iso)
         run("genisoimage", "-o", image, "-J", "-r", iso)
         # Re-read the final container, not just the directory it came from.
         final = work / "final"
         run("7z", "x", image, "-o" + str(final), "-y")
-        _, final_images = verify_images(final / "ota_v0")
-        require(final_images == verified_images, "Final container verification failed")
+        final_records, final_images = verify_images(final / "ota_v0")
+        require(final_records == verified_records and final_images == verified_images, "Final container verification failed")
+        require(container_inventory(final) == expected_container, "Final ISO contains missing, unexpected or changed payload files")
+        report["final_container_inventory_verified"] = True
         report.update(image_sha256=digest(image.read_bytes()), image_bytes=image.stat().st_size,
                       structural_checks_passed=True,
                       kernel_write_warning="The standard updater can rewrite the identical kernel; this is not an A/B update.")

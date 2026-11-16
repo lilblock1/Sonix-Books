@@ -45,6 +45,14 @@ jobs:
           ref: 26bb785c9deddb66a17717b21bb4e328f03ade32
           path: quicknes-upstream
           persist-credentials: false
+      - name: Check out pinned gpSP source
+        if: env.CORE_ID == 'gpsp'
+        uses: actions/checkout@v4
+        with:
+          repository: libretro/gpsp
+          ref: 5819380c2ffb0900219d700a382ee68c464ebb99
+          path: gpsp-upstream
+          persist-credentials: false
       - name: Install fallback MIPS compiler if the firmware cache is unavailable
         run: |
           if [ ! -x sonix-player/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-gcc ]; then
@@ -58,11 +66,12 @@ jobs:
           if [ ! -x "${compiler}gcc" ]; then compiler=mipsel-linux-gnu-; fi
           command -v "${compiler}gcc"
           dir="game-store/cores/$CORE_ID"
-          make -C "$dir" check UPSTREAM="$PWD/quicknes-upstream" CORE_VERSION="$CORE_VERSION"
+          upstream="$PWD/$CORE_ID-upstream"
+          make -C "$dir" check UPSTREAM="$upstream" CORE_VERSION="$CORE_VERSION"
           staging="$PWD/core-stage/Games/$CORE_ID"
           mkdir -p "$staging"
-          if [ "$CORE_ID" = quicknes ]; then command -v "${compiler}g++"; fi
-          make -C "$dir" core CC="${compiler}gcc" CXX="${compiler}g++" UPSTREAM="$PWD/quicknes-upstream" OUT="$staging/core.so" CFLAGS="-Os -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -fdata-sections" CORE_VERSION="$CORE_VERSION"
+          if [ "$CORE_ID" = quicknes ] || [ "$CORE_ID" = gpsp ]; then command -v "${compiler}g++"; fi
+          make -C "$dir" core CC="${compiler}gcc" CXX="${compiler}g++" UPSTREAM="$upstream" OUT="$staging/core.so" CFLAGS="-Os -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -fdata-sections" CORE_VERSION="$CORE_VERSION"
           "${compiler}readelf" -h -d -l -V -Ws "$staging/core.so" > core-elf.txt
           python3 - <<'PY'
           import re
@@ -75,7 +84,7 @@ jobs:
           needed=set(re.findall(r'Shared library: \[([^\]]+)\]',s))
           import os
           allowed={'libc.so.6','libm.so.6','libgcc_s.so.1'}
-          if os.environ['CORE_ID']=='quicknes': allowed.add('ld.so.1') # additionally checked against pinned firmware below
+          if os.environ['CORE_ID'] in ('quicknes','gpsp'): allowed.add('ld.so.1') # additionally checked against pinned firmware below
           assert needed <= allowed,needed
           for symbol in ('retro_api_version','retro_init','retro_deinit','retro_load_game','retro_unload_game','retro_run','retro_get_system_info','retro_get_system_av_info','retro_set_environment','retro_set_video_refresh','retro_set_input_poll','retro_set_input_state','retro_set_audio_sample','retro_set_audio_sample_batch','retro_serialize_size','retro_serialize','retro_unserialize','retro_get_memory_data','retro_get_memory_size'):
               assert any(re.search(r'\b'+symbol+r'$',line) and ' UND ' not in line and ' GLOBAL ' in line for line in s.splitlines()),symbol
@@ -87,6 +96,11 @@ jobs:
             cp "$dir"/Makefile "$dir"/smoke.c "$dir"/UPSTREAM.txt "$dir"/optimize.py "$staging/source/"
             cp .github/workflows/game-store-core.yml "$staging/source/"
             cp quicknes-upstream/LICENSE "$staging/LICENSE"
+          elif [ "$CORE_ID" = gpsp ]; then
+            git -C gpsp-upstream archive --format=tar.gz --prefix=gpsp/ HEAD > "$staging/source/gpsp-upstream.tar.gz"
+            cp "$dir"/Makefile "$dir"/smoke.c "$dir"/test_rom.py "$dir"/UPSTREAM.txt "$staging/source/"
+            cp .github/workflows/game-store-core.yml "$staging/source/"
+            cp gpsp-upstream/COPYING "$staging/LICENSE"
           else
             cp "$dir"/core.c "$dir"/Makefile "$staging/source/"
           fi
@@ -105,8 +119,8 @@ jobs:
           done
           test -s "$staging/LICENSE"
           cp core-elf.txt "$staging/core-elf.txt"
-      - name: Verify QuickNES dependencies against the exact tested R1 filesystem
-        if: env.CORE_ID == 'quicknes'
+      - name: Verify emulator dependencies against the exact tested R1 filesystem
+        if: env.CORE_ID == 'quicknes' || env.CORE_ID == 'gpsp'
         run: |
           set -eu
           sudo apt-get update
@@ -128,9 +142,9 @@ jobs:
           test -e r1-root/lib/ld.so.1 || test -e r1-root/usr/lib/ld.so.1
           mkdir -p abi-empty
           /usr/bin/python3 firmware-contract/sonix-player/tools/system-libs/abicheck.py \
-            "$PWD/r1-root" "$PWD/abi-empty" "$PWD/core-stage/Games/quicknes/core.so" > quicknes-r1-abi.txt
-          cat quicknes-r1-abi.txt
-          cp quicknes-r1-abi.txt core-stage/Games/quicknes/
+            "$PWD/r1-root" "$PWD/abi-empty" "$PWD/core-stage/Games/$CORE_ID/core.so" > "$CORE_ID-r1-abi.txt"
+          cat "$CORE_ID-r1-abi.txt"
+          cp "$CORE_ID-r1-abi.txt" "core-stage/Games/$CORE_ID/"
       - name: Create independent package and verify real SD installer
         run: |
           set -eu
@@ -199,7 +213,7 @@ jobs:
           request=json.loads(Path('game-store/core-request.json').read_text())
           report=json.loads(Path('candidate/report.json').read_text())
           assert request.get('channel')=='device-test'
-          assert (request['id'],request['version']) in {('2048','v1.0.0'),('2048','v1.1.0'),('quicknes','v1.0.0'),('quicknes','v1.1.0')}
+          assert (request['id'],request['version']) in {('2048','v1.0.0'),('2048','v1.1.0'),('quicknes','v1.0.0'),('quicknes','v1.1.0'),('gpsp','v1.0.0')}
           assert report['version']==request['version'] and report['runtime_abi']==1 and report['hardware_verified'] is False
           asset='sonix-game-v1-'+request['id']+'-'+request['version']+'.spk'
           assert hashlib.sha256((Path('candidate')/asset).read_bytes()).hexdigest()==report['sha256']
@@ -218,7 +232,9 @@ jobs:
             test "$(wc -c < "candidate/$logo")" -eq 4608
             gh release upload sonix-game-store-v1 "candidate/$logo"
           fi
-          if [ "$asset" = sonix-game-v1-quicknes-v1.1.0.spk ]; then
+          if [ "$asset" = sonix-game-v1-gpsp-v1.0.0.spk ]; then
+            gh release upload sonix-game-store-v1 "candidate/$asset#sonix-ui1|emulator|gpSP|Experimental GBA emulator with open BIOS and SD ROM streaming. Bring your own .gba files."
+          elif [ "$asset" = sonix-game-v1-quicknes-v1.1.0.spk ]; then
             gh release upload sonix-game-store-v1 "candidate/$asset#sonix-ui1|emulator|QuickNES|Optimized NES emulator. Use your own .nes ROMs."
           elif [ "$asset" = sonix-game-v1-quicknes-v1.0.0.spk ]; then
             gh release upload sonix-game-store-v1 "candidate/$asset#sonix-ui1|emulator|QuickNES|Experimental NES and Famicom emulator. Use your own .nes ROMs."

@@ -1,16 +1,12 @@
 {
-  "id": "quicknes",
-  "version": "v1.1.0",
+  "id": "gpsp",
+  "version": "v1.0.0",
   "channel": "device-test",
   "runtime_abi": 1,
   "hardware_verified": false,
   "firmware_test": "v0.3.0.76-test",
-  "upstream": "26bb785c9deddb66a17717b21bb4e328f03ade32",
-  "build_attempt": 3,
-  "optimizations": [
-    "visible-area RGB565 conversion",
-    "scalar pixel lookup unrolling",
-    "repeatable isolated host video/audio regression gate"
-  ],
-  "test_fix": "Repair generated test ROM JMP target and initialize PPU/APU; retain repeated baseline and optimized A/V hash comparison"
+  "upstream": "5819380c2ffb0900219d700a382ee68c464ebb99",
+  "mode": "interpreter",
+  "rom_cache_mib": 4,
+  "build_attempt": 1
 }

@@ -58,11 +58,11 @@ jobs:
           if [ ! -x "${compiler}gcc" ]; then compiler=mipsel-linux-gnu-; fi
           command -v "${compiler}gcc"
           dir="game-store/cores/$CORE_ID"
-          make -C "$dir" check UPSTREAM="$PWD/quicknes-upstream"
+          make -C "$dir" check UPSTREAM="$PWD/quicknes-upstream" CORE_VERSION="$CORE_VERSION"
           staging="$PWD/core-stage/Games/$CORE_ID"
           mkdir -p "$staging"
           if [ "$CORE_ID" = quicknes ]; then command -v "${compiler}g++"; fi
-          make -C "$dir" core CC="${compiler}gcc" CXX="${compiler}g++" UPSTREAM="$PWD/quicknes-upstream" OUT="$staging/core.so" CFLAGS="-Os -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -fdata-sections"
+          make -C "$dir" core CC="${compiler}gcc" CXX="${compiler}g++" UPSTREAM="$PWD/quicknes-upstream" OUT="$staging/core.so" CFLAGS="-Os -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -fdata-sections" CORE_VERSION="$CORE_VERSION"
           "${compiler}readelf" -h -d -l -V -Ws "$staging/core.so" > core-elf.txt
           python3 - <<'PY'
           import re
@@ -84,7 +84,7 @@ jobs:
           mkdir -p "$staging/source"
           if [ "$CORE_ID" = quicknes ]; then
             git -C quicknes-upstream archive --format=tar.gz --prefix=QuickNES_Core/ HEAD > "$staging/source/quicknes-upstream.tar.gz"
-            cp "$dir"/Makefile "$dir"/smoke.c "$dir"/UPSTREAM.txt "$staging/source/"
+            cp "$dir"/Makefile "$dir"/smoke.c "$dir"/UPSTREAM.txt "$dir"/optimize.py "$staging/source/"
             cp .github/workflows/game-store-core.yml "$staging/source/"
             cp quicknes-upstream/LICENSE "$staging/LICENSE"
           else
@@ -199,7 +199,7 @@ jobs:
           request=json.loads(Path('game-store/core-request.json').read_text())
           report=json.loads(Path('candidate/report.json').read_text())
           assert request.get('channel')=='device-test'
-          assert (request['id'],request['version']) in {('2048','v1.0.0'),('2048','v1.1.0'),('quicknes','v1.0.0')}
+          assert (request['id'],request['version']) in {('2048','v1.0.0'),('2048','v1.1.0'),('quicknes','v1.0.0'),('quicknes','v1.1.0')}
           assert report['version']==request['version'] and report['runtime_abi']==1 and report['hardware_verified'] is False
           asset='sonix-game-v1-'+request['id']+'-'+request['version']+'.spk'
           assert hashlib.sha256((Path('candidate')/asset).read_bytes()).hexdigest()==report['sha256']
@@ -218,7 +218,9 @@ jobs:
             test "$(wc -c < "candidate/$logo")" -eq 4608
             gh release upload sonix-game-store-v1 "candidate/$logo"
           fi
-          if [ "$asset" = sonix-game-v1-quicknes-v1.0.0.spk ]; then
+          if [ "$asset" = sonix-game-v1-quicknes-v1.1.0.spk ]; then
+            gh release upload sonix-game-store-v1 "candidate/$asset#sonix-ui1|emulator|QuickNES|Optimized NES emulator. Use your own .nes ROMs."
+          elif [ "$asset" = sonix-game-v1-quicknes-v1.0.0.spk ]; then
             gh release upload sonix-game-store-v1 "candidate/$asset#sonix-ui1|emulator|QuickNES|Experimental NES and Famicom emulator. Use your own .nes ROMs."
           else
             gh release upload sonix-game-store-v1 "candidate/$asset"

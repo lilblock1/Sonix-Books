@@ -1,13 +1,14 @@
 {
   "id": "gpsp",
-  "version": "v1.0.0",
+  "version": "v1.1.0",
   "channel": "device-test",
   "runtime_abi": 1,
   "hardware_verified": false,
   "firmware_test": "v0.3.0.76-test",
   "upstream": "5819380c2ffb0900219d700a382ee68c464ebb99",
-  "mode": "interpreter",
+  "mode": "mips-dynarec-with-interpreter-fallback",
   "rom_cache_mib": 4,
-  "build_attempt": 2,
-  "build_fix": "Preserve upstream feature macros and PIC with isolated recursive make flags"
+  "build_attempt": 1,
+  "jit_cache_bytes": 2490368,
+  "validation": "host interpreter plus target MIPS ARM and Thumb JIT and interpreter tests against pinned R1 libraries"
 }

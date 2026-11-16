@@ -8,6 +8,7 @@
 #include "src/gui/shell/theme.h"
 #include "src/gui/shell/topbar.h"
 #include "src/system/device/nativegame.h"
+#include "src/system/device/nativegame_timing.h"
 #include "src/system/device/game_store.h"
 #include "src/gui/shell/gamelogo.h"
 #include "src/system/gearboy/gbinput.h"
@@ -26,6 +27,10 @@
 lv_obj_t *gamespage_screen;
 static lv_obj_t *games_list,*rom_screen,*rom_list,*play_screen,*picture,*status,*return_screen,*control_hint;
 static lv_timer_t *timer;
+static lv_obj_t *game_settings,*fps_value,*fps_notice;
+static bool settings_open;
+static void update_fps_label(void);
+static void settings_clicked(lv_event_t *e);
 static gui_config_t *config;
 static char games[MAX_GAMES][SD_GAME_ID_MAX],roms[MAX_ROMS][256],chosen[SD_GAME_ID_MAX];
 static unsigned game_count,rom_count;
@@ -80,6 +85,7 @@ static void gearboy_clicked(lv_event_t *e) {(void)e;if(available())switch_screen
 static void flappy_clicked(lv_event_t *e) {(void)e;if(available())flappybird_open();}
 static void refresh_frame(lv_timer_t *t) {
 	(void)t;
+	if(settings_open){update_fps_label();return;}
 	// Raw evdev owns the touch panel; reflect held buttons on the UI thread.
 	uint16_t visible=(uint16_t)atomic_load(&visible_keys);
 	if(visible!=last_visible_keys){
@@ -104,17 +110,22 @@ static void raw_exit_ui(void *arg) {
 	if ((unsigned)(uintptr_t)arg == atomic_load(&session_generation) && lv_screen_active()==play_screen) leave_play(NULL);
 }
 static void raw_exit(void) { (void)gui_post(raw_exit_ui,(void*)(uintptr_t)atomic_load(&session_generation)); }
+static void raw_settings_ui(void *arg) {
+	if((unsigned)(uintptr_t)arg==atomic_load(&session_generation)&&lv_screen_active()==play_screen&&!settings_open)settings_clicked(NULL);
+}
 static void raw_keys(uint16_t mask) {
 	uint16_t pressed=mask & (uint16_t)~raw_previous;
 	raw_previous=mask;
 	atomic_store(&visible_keys,mask);
 	if(pressed&(1u<<12))nativegame_save();
 	if(pressed&(1u<<13))nativegame_load();
+	if(pressed&(1u<<14))(void)gui_post(raw_settings_ui,(void*)(uintptr_t)atomic_load(&session_generation));
 	nativegame_keys(mask&0x0fff);
 }
 static void unloaded(lv_event_t *e) {
 	(void)e;
 	lv_timer_pause(timer);
+	settings_open=false;lv_obj_add_flag(game_settings,LV_OBJ_FLAG_HIDDEN);
 	atomic_fetch_add(&session_generation,1);
 	if(raw_claimed){gbinput_stop();raw_claimed=false;}
 	nativegame_stop();
@@ -151,11 +162,90 @@ static lv_obj_t *pad(const char *text,int x,int y,int w,int h,lv_event_cb_t cb,u
 	lv_obj_set_style_text_font(l,&font_ui_24_bold,0);lv_obj_set_style_text_color(l,lv_color_white(),0);lv_obj_center(l);
 	lv_obj_add_event_cb(b,cb,cb==game_key?LV_EVENT_ALL:LV_EVENT_CLICKED,(void*)data);
 	if(zone_count<sizeof(zones)/sizeof(zones[0])) {
-		uint16_t key=cb==game_key?(uint16_t)data:cb==save_clicked?1u<<12:cb==load_clicked?1u<<13:GBINPUT_KEY_MENU;
+		uint16_t key=cb==game_key?(uint16_t)data:cb==save_clicked?1u<<12:cb==load_clicked?1u<<13:cb==settings_clicked?1u<<14:GBINPUT_KEY_MENU;
 		zones[zone_count++]=(gbinput_zone_t){x,y,w,h,key};
 		control_widgets[widget_count]=b;control_masks[widget_count++]=key;
 	}
 	return b;
+}
+static void update_fps_label(void) {
+	unsigned limit;double native;bool error;
+	nativegame_get_fps(&limit,&native,&error);
+	char text[128];
+	if(native<=0)snprintf(text,sizeof(text),"Waiting for game...");
+	else if(!limit)snprintf(text,sizeof(text),"Native  |  %.2f FPS",native);
+	else snprintf(text,sizeof(text),"%u FPS cap  |  %.2f effective",limit,game_effective_fps(native,limit));
+	if(strcmp(lv_label_get_text(fps_value),text))lv_label_set_text(fps_value,text);
+	const char *notice=error?"Could not save to SD. Setting is active for this session.":"Saved per ROM on microSD. Lower caps slow the game and audio pitch.";
+	if(strcmp(lv_label_get_text(fps_notice),notice))lv_label_set_text(fps_notice,notice);
+}
+static void choose_fps(lv_event_t *e) {
+	unsigned limit;double native;
+	nativegame_get_fps(&limit,&native,NULL);
+	if(native<=0)return;
+	int action=(int)(intptr_t)lv_event_get_user_data(e);
+	if(action==1||action==-1){
+		int value=limit?(int)limit:(int)(native+0.5);
+		value+=action;
+		if(value<(int)NATIVEGAME_FPS_MIN)value=NATIVEGAME_FPS_MIN;
+		if(value>(int)NATIVEGAME_FPS_MAX)value=NATIVEGAME_FPS_MAX;
+		limit=(unsigned)value;
+	}else limit=(unsigned)action;
+	if(nativegame_set_fps(limit))update_fps_label();
+}
+static void resume_game(lv_event_t *e) {
+	(void)e;
+	if(!settings_open)return;
+	settings_open=false;lv_obj_add_flag(game_settings,LV_OBJ_FLAG_HIDDEN);
+	buttons=raw_previous=last_visible_keys=0;atomic_store(&visible_keys,0);
+	nativegame_keys(0);
+	for(unsigned i=0;i<widget_count;++i)lv_obj_remove_state(control_widgets[i],LV_STATE_PRESSED);
+	raw_claimed=gbinput_start_for(zones,(int)zone_count,raw_exit,raw_keys);
+	nativegame_pause(false);
+}
+static void settings_clicked(lv_event_t *e) {
+	(void)e;
+	if(settings_open||!nativegame_busy()||nativegame_failed())return;
+	settings_open=true;nativegame_pause(true);
+	if(raw_claimed){gbinput_stop();raw_claimed=false;}
+	buttons=raw_previous=0;atomic_store(&visible_keys,0);
+	nativegame_keys(0);
+	update_fps_label();lv_obj_move_foreground(game_settings);
+	lv_obj_remove_flag(game_settings,LV_OBJ_FLAG_HIDDEN);
+}
+static lv_obj_t *setting_button(const char *text,int x,int y,int w,int h,lv_event_cb_t cb,int val){
+	lv_obj_t *b=lv_btn_create(game_settings);lv_obj_set_pos(b,x,y);lv_obj_set_size(b,w,h);
+	lv_obj_add_style(b,&theme_style_card,0);lv_obj_add_style(b,&theme_style_card_pressed,LV_STATE_PRESSED);
+	lv_obj_set_scrollable(b,false);
+	lv_obj_t *l=lv_label_create(b);lv_label_set_text(l,text);lv_obj_add_style(l,&theme_style_text,0);
+	lv_obj_set_style_text_font(l,&font_ui_24_bold,0);lv_obj_center(l);
+	lv_obj_add_event_cb(b,cb,LV_EVENT_CLICKED,(void*)(intptr_t)val);
+	return b;
+}
+static void create_game_settings(void){
+	game_settings=lv_obj_create(play_screen);
+	lv_obj_set_size(game_settings,lv_pct(100),lv_pct(100));lv_obj_set_pos(game_settings,0,0);
+	lv_obj_set_style_bg_color(game_settings,lv_color_hex(0x171b22),0);lv_obj_set_style_bg_opa(game_settings,LV_OPA_COVER,0);
+	lv_obj_set_style_border_width(game_settings,0,0);lv_obj_set_style_pad_all(game_settings,0,0);
+	lv_obj_set_scrollable(game_settings,false);
+	lv_obj_t *title=lv_label_create(game_settings);lv_label_set_text(title,"Game settings");
+	lv_obj_set_style_text_font(title,&font_ui_24_bold,0);lv_obj_set_style_text_color(title,lv_color_white(),0);
+	lv_obj_align(title,LV_ALIGN_TOP_MID,0,35);
+	fps_value=lv_label_create(game_settings);lv_obj_set_style_text_font(fps_value,&font_ui_24_bold,0);
+	lv_obj_set_style_text_color(fps_value,lv_color_white(),0);lv_obj_align(fps_value,LV_ALIGN_TOP_MID,0,102);
+	setting_button("Native speed",20,160,440,60,choose_fps,0);
+	setting_button("30 FPS",20,238,210,62,choose_fps,30);
+	setting_button("45 FPS",250,238,210,62,choose_fps,45);
+	setting_button("50 FPS",20,318,210,62,choose_fps,50);
+	setting_button("60 FPS",250,318,210,62,choose_fps,60);
+	setting_button("-1 FPS",20,400,210,62,choose_fps,-1);
+	setting_button("+1 FPS",250,400,210,62,choose_fps,1);
+	fps_notice=lv_label_create(game_settings);lv_obj_set_width(fps_notice,440);lv_label_set_long_mode(fps_notice,LV_LABEL_LONG_WRAP);
+	lv_obj_set_style_text_font(fps_notice,&font_ui_20,0);lv_obj_set_style_text_color(fps_notice,lv_color_hex(0xc0c7d0),0);
+	lv_obj_set_style_text_align(fps_notice,LV_TEXT_ALIGN_CENTER,0);lv_obj_align(fps_notice,LV_ALIGN_TOP_MID,0,490);
+	setting_button("Resume game",20,610,440,74,resume_game,0);
+	setting_button("Save and exit",20,700,440,64,leave_play,0);
+	lv_obj_add_flag(game_settings,LV_OBJ_FLAG_HIDDEN);
 }
 static void launch(const char *rom) {
 	if(!available())return;
@@ -272,9 +362,10 @@ static void build_controls(bool puzzle) {
 		pad("LEFT",38,490,128,84,game_key,1u<<6);
 		pad("RIGHT",314,490,128,84,game_key,1u<<7);
 		pad("DOWN",176,580,128,84,game_key,1u<<5);
-		pad("Undo",12,702,142,64,game_key,1u<<0);
-		pad("New game",169,702,142,64,game_key,1u<<3);
-		pad("Exit",326,702,142,64,leave_play,0);
+		pad("Undo",8,702,108,64,game_key,1u<<0);
+		pad("New",124,702,108,64,game_key,1u<<3);
+		pad("Settings",240,702,116,64,settings_clicked,0);
+		pad("Exit",364,702,108,64,leave_play,0);
 		return;
 	}else{
 		// R1 portrait layout with larger side-by-side thumb targets.
@@ -293,9 +384,10 @@ static void build_controls(bool puzzle) {
 		pad("B",268,532,86,76,game_key,1u<<0);pad("A",368,532,86,76,game_key,1u<<8);
 		pad("SELECT",254,620,102,56,game_key,1u<<2);pad("START",366,620,102,56,game_key,1u<<3);
 	}
-	pad("Save",12,702,142,64,save_clicked,0);
-	pad("Load",169,702,142,64,load_clicked,0);
-	pad("Exit",326,702,142,64,leave_play,0);
+	pad("Save",8,702,108,64,save_clicked,0);
+	pad("Load",124,702,108,64,load_clicked,0);
+	pad("Settings",240,702,116,64,settings_clicked,0);
+	pad("Exit",364,702,108,64,leave_play,0);
 }
 void gamespage_init(gui_config_t *cfg) {
 	config=cfg;games_list=make_list(gamespage_screen,"Game Launcher");
@@ -318,6 +410,7 @@ void gamespage_init(gui_config_t *cfg) {
 	lv_obj_set_style_text_color(control_hint,lv_color_hex(0xc0c7d0),0);
 	lv_obj_set_style_text_font(control_hint,&font_ui_18,0);
 	lv_obj_align(control_hint,LV_ALIGN_TOP_MID,0,376);
+	create_game_settings();
 	lv_obj_add_event_cb(play_screen,unloaded,LV_EVENT_SCREEN_UNLOADED,NULL);
 	timer=lv_timer_create(refresh_frame,16,NULL);lv_timer_pause(timer);
 }

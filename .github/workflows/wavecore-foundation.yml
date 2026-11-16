@@ -1,0 +1,90 @@
+name: WaveCore OS - non-flashable foundation
+
+on:
+  push:
+    branches: [sonix-os]
+    paths: ['wavecore/**', '.github/workflows/wavecore-foundation.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wavecore-foundation
+  cancel-in-progress: false
+
+jobs:
+  rootfs:
+    if: github.ref == 'refs/heads/sonix-os' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[wavecore-build]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install foundation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git rsync bc bzip2 cpio unzip file wget libncurses-dev python3 perl patch gcc g++ make binutils bison flex gawk texinfo qemu-user p7zip-full squashfs-tools libssl-dev
+      - name: Check out pinned Buildroot
+        uses: actions/checkout@v4
+        with:
+          repository: buildroot/buildroot
+          ref: 137a566bf5353831d97c068a4c22e6df5b4d07a0
+          path: buildroot-src
+          persist-credentials: false
+      - name: Configure independent minimal MIPS Linux userspace
+        run: |
+          make -C buildroot-src O="$PWD/buildroot-output" BR2_DEFCONFIG="$PWD/wavecore/buildroot/wavecore_r1_defconfig" defconfig
+          config=buildroot-output/.config
+          for symbol in BR2_mipsel BR2_mips_32r2 BR2_TOOLCHAIN_BUILDROOT_GLIBC BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_4_4 BR2_INIT_BUSYBOX BR2_TARGET_ROOTFS_TAR_GZIP; do
+            grep -qx "$symbol=y" "$config"
+          done
+          ! grep -qx 'BR2_LINUX_KERNEL=y' "$config"
+      - name: Build only the Linux userspace
+        env:
+          FORCE_UNSAFE_CONFIGURE: '1'
+        run: |
+          make -C buildroot-src O="$PWD/buildroot-output" -j2
+          make -C buildroot-src O="$PWD/buildroot-output" legal-info
+          test -f buildroot-output/images/rootfs.tar.gz
+      - name: Verify and extract known Update 13 reference
+        run: |
+          url=$(python3 -c 'import json;print(json.load(open("wavecore/reference.json"))["reference"]["url"])')
+          hash=$(python3 -c 'import json;print(json.load(open("wavecore/reference.json"))["reference"]["sha256"])')
+          curl --fail --location --retry 3 "$url" -o reference.upt
+          printf '%s  reference.upt\n' "$hash" | sha256sum --check
+          7z x -y reference.upt -oreference-iso >/dev/null
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0,'sonix-player/tools')
+          from r1_candidate import verify_images
+          _, images=verify_images(Path('reference-iso/ota_v0'))
+          Path('reference.squashfs').write_bytes(images['rootfs.squashfs'])
+          PY
+          sudo unsquashfs -no-progress -no-xattrs -d reference-root reference.squashfs
+      - name: Run isolated MIPS userspace smoke test and audit ABI
+        run: |
+          mkdir -p foundation-artifact
+          root="$PWD/buildroot-output/target"
+          timeout 30 qemu-mipsel -L "$root" "$root/bin/busybox" true
+          timeout 30 qemu-mipsel -L "$root" "$root/bin/busybox" echo "WaveCore MIPS userspace smoke test passed"
+          sudo python3 wavecore/tools/audit.py reference-root "$root" foundation-artifact/compatibility.json \
+            buildroot-output/images/rootfs.tar.gz reference.squashfs
+          cp buildroot-output/images/rootfs.tar.gz foundation-artifact/wavecore-rootfs-NOT-FIRMWARE.tar.gz
+          cp buildroot-output/.config foundation-artifact/buildroot.config
+          cp wavecore/README.md wavecore/reference.json foundation-artifact/
+          (cd foundation-artifact && sha256sum wavecore-rootfs-NOT-FIRMWARE.tar.gz > SHA256SUMS)
+      - name: Upload non-flashable research artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wavecore-phase1-NOT-FIRMWARE
+          path: foundation-artifact/
+          retention-days: 14
+      - name: Upload source and license materials
+        uses: actions/upload-artifact@v4
+        with:
+          name: wavecore-phase1-legal-info
+          path: buildroot-output/legal-info/
+          retention-days: 14

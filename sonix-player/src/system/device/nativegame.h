@@ -13,4 +13,8 @@ bool nativegame_present(uint16_t *pixels, uint32_t *serial);
 void nativegame_keys(uint16_t keys);
 void nativegame_save(void);
 void nativegame_load(void);
+// 0 uses native timing. Per-ROM cap is loaded and saved by the worker.
+void nativegame_pause(bool paused);
+bool nativegame_set_fps(unsigned fps);
+void nativegame_get_fps(unsigned *limit, double *native, bool *save_error);
 #endif

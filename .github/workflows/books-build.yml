@@ -173,6 +173,8 @@ jobs:
             src/system/device/game_store.c src/system/device/ota_policy.c \
             src/system/device/sdpackages_paths.c src/system/core/json.c -o build_tests/test_game_store
           ./build_tests/test_game_store
+          gcc -std=c11 -Wall -Wextra -Werror -I. tests/test_nativegame_timing.c -o build_tests/test_nativegame_timing
+          ./build_tests/test_nativegame_timing
       - name: Test verified test-release publication policy
         run: python3 sonix-player/tests/test_test_release.py
       - name: Test firmware chunk verification

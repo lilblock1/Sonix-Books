@@ -173,10 +173,10 @@ static void update_fps_label(void) {
 	nativegame_get_fps(&limit,&native,&error);
 	char text[128];
 	if(native<=0)snprintf(text,sizeof(text),"Waiting for game...");
-	else if(!limit)snprintf(text,sizeof(text),"Native  |  %.2f FPS",native);
-	else snprintf(text,sizeof(text),"%u FPS cap  |  %.2f effective",limit,game_effective_fps(native,limit));
+	else if(!limit)snprintf(text,sizeof(text),"Native: %.2f FPS\nLast measured: %.1f FPS",native,nativegame_measured_fps());
+	else snprintf(text,sizeof(text),"%u cap  |  %.2f target\nLast measured: %.1f FPS",limit,game_effective_fps(native,limit),nativegame_measured_fps());
 	if(strcmp(lv_label_get_text(fps_value),text))lv_label_set_text(fps_value,text);
-	const char *notice=error?"Could not save to SD. Setting is active for this session.":"Saved per ROM on microSD. Lower caps slow the game and audio pitch.";
+	const char *notice=error?"Could not save to SD. Setting is active for this session.":"Limits are stored per ROM on microSD. Lower caps slow the game and lower audio pitch.";
 	if(strcmp(lv_label_get_text(fps_notice),notice))lv_label_set_text(fps_notice,notice);
 }
 static void choose_fps(lv_event_t *e) {
@@ -232,7 +232,7 @@ static void create_game_settings(void){
 	lv_obj_set_style_text_font(title,&font_ui_24_bold,0);lv_obj_set_style_text_color(title,lv_color_white(),0);
 	lv_obj_align(title,LV_ALIGN_TOP_MID,0,35);
 	fps_value=lv_label_create(game_settings);lv_obj_set_style_text_font(fps_value,&font_ui_24_bold,0);
-	lv_obj_set_style_text_color(fps_value,lv_color_white(),0);lv_obj_align(fps_value,LV_ALIGN_TOP_MID,0,102);
+	lv_obj_set_style_text_color(fps_value,lv_color_white(),0);lv_obj_set_style_text_align(fps_value,LV_TEXT_ALIGN_CENTER,0);lv_obj_align(fps_value,LV_ALIGN_TOP_MID,0,90);
 	setting_button("Native speed",20,160,440,60,choose_fps,0);
 	setting_button("30 FPS",20,238,210,62,choose_fps,30);
 	setting_button("45 FPS",250,238,210,62,choose_fps,45);

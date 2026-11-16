@@ -8,7 +8,8 @@
   "upstream": "5819380c2ffb0900219d700a382ee68c464ebb99",
   "mode": "mips-dynarec-with-interpreter-fallback",
   "rom_cache_mib": 4,
-  "build_attempt": 1,
+  "build_attempt": 2,
   "jit_cache_bytes": 2490368,
-  "validation": "host interpreter plus target MIPS ARM and Thumb JIT and interpreter tests against pinned R1 libraries"
+  "validation": "host interpreter plus target MIPS ARM and Thumb JIT and interpreter tests against pinned R1 libraries",
+  "build_fix": "Explicit non-executable stack linker flag; preserve all ABI, JIT and interpreter execution checks"
 }

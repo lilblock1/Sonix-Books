@@ -25,4 +25,5 @@ void nativegame_set_fast_forward(bool enabled);
 bool nativegame_fast_forward(void);
 void nativegame_diagnostics(double *fps,double *video_fps,unsigned *ram_kib);
 int nativegame_state_result(void); // 0 pending/none, 1 saved, 2 loaded, -1 failed
+bool nativegame_recovered(void); // previous session did not close cleanly
 #endif

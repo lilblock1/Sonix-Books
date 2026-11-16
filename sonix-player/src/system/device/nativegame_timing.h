@@ -22,4 +22,32 @@ static inline int game_audio_rate(double native,double rate,unsigned limit) {
     double scaled=rate*game_effective_fps(native,limit)/native;
     return (int)(scaled+0.5);
 }
+// Keep the DAC at a standard 48 kHz even when the core reports 65536 Hz
+// (gpSP) or the user lowers emulation speed. Continuous stereo linear
+// interpolation preserves the sample-clock ratio across callback boundaries.
+#define GAME_PCM_RATE 48000u
+typedef struct {
+    unsigned in_rate, out_rate, phase;
+    int16_t left,right;
+    bool ready;
+} game_resampler_t;
+typedef void (*game_pcm_emit_t)(int16_t,int16_t);
+static inline void game_resampler_reset(game_resampler_t *r,unsigned in_rate,unsigned out_rate) {
+    *r=(game_resampler_t){.in_rate=in_rate,.out_rate=out_rate};
+}
+static inline void game_resampler_push(game_resampler_t *r,int16_t left,int16_t right,game_pcm_emit_t emit) {
+    if(!r->in_rate||!r->out_rate)return;
+    if(r->in_rate==r->out_rate){emit(left,right);return;}
+    if(!r->ready){r->left=left;r->right=right;r->ready=true;return;}
+    while(r->phase<r->out_rate){
+        // Q15 interpolation: signed products fit int32 even at full scale.
+        int32_t frac=(int32_t)(r->phase*32768u/r->out_rate);
+        int32_t l=r->left+((int32_t)left-r->left)*frac/32768;
+        int32_t rr=r->right+((int32_t)right-r->right)*frac/32768;
+        emit((int16_t)l,(int16_t)rr);
+        r->phase+=r->in_rate;
+    }
+    r->phase-=r->out_rate;
+    r->left=left;r->right=right;
+}
 #endif

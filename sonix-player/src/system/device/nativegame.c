@@ -106,14 +106,27 @@ static void video(const void *p,unsigned w,unsigned h,size_t pitch) {
 	if(dh>NATIVEGAME_H_PIX){dh=NATIVEGAME_H_PIX;dw=(unsigned)((uint64_t)w*dh/h);}
 	if(!dw||!dh)return;
 	unsigned x0=(NATIVEGAME_W-dw)/2,y0=(NATIVEGAME_H_PIX-dh)/2;
+	// Only the game worker uses these maps. Recompute on geometry changes,
+	// not for every destination pixel; copy repeated source rows directly.
+	static uint16_t xmap[NATIVEGAME_W],ymap[NATIVEGAME_H_PIX];
+	static unsigned old_w,old_h,old_dw,old_dh;
+	bool changed=old_w!=w||old_h!=h||old_dw!=dw||old_dh!=dh;
+	if(changed){
+		for(unsigned x=0;x<dw;++x)xmap[x]=(uint16_t)(x*w/dw);
+		for(unsigned y=0;y<dh;++y)ymap[y]=(uint16_t)(y*h/dh);
+		old_w=w;old_h=h;old_dw=dw;old_dh=dh;
+	}
 	pthread_mutex_lock(&lock);
 	if(latest){
-		memset(latest,0,PIXELS*2);
+		// A new session starts with a zeroed framebuffer; bars change only
+		// when the geometry changes.
+		if(changed)memset(latest,0,PIXELS*2);
 		for(unsigned y=0;y<dh;++y) {
-			const unsigned char *src=(const unsigned char*)p+(size_t)(y*h/dh)*pitch;
+			const unsigned char *src=(const unsigned char*)p+(size_t)ymap[y]*pitch;
 			uint16_t *dst=latest+(y+y0)*NATIVEGAME_W+x0;
+			if(y&&ymap[y]==ymap[y-1]){memcpy(dst,dst-NATIVEGAME_W,dw*2u);continue;}
 			for(unsigned x=0;x<dw;++x) {
-				unsigned i=x*w/dw;
+				unsigned i=xmap[x];
 				if(format==1){uint32_t q;memcpy(&q,src+i*4,4);dst[x]=(uint16_t)(((q>>8)&0xf800)|((q>>5)&0x7e0)|((q>>3)&31));}
 				else {uint16_t q;memcpy(&q,src+i*2,2);dst[x]=format==2?q:(uint16_t)(((q&0x7c00)<<1)|((q&0x3e0)<<1)|((q&0x200)>>4)|(q&31));}
 			}

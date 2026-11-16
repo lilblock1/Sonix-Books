@@ -2,6 +2,7 @@
 #define NATIVEGAME_H
 #include <stdbool.h>
 #include <stdint.h>
+#include "nativegame_options.h"
 #define NATIVEGAME_W 480
 #define NATIVEGAME_H_PIX 360
 // GUI starts one managed game; worker owns all libretro calls and audio.
@@ -18,4 +19,10 @@ void nativegame_pause(bool paused);
 bool nativegame_set_fps(unsigned fps);
 void nativegame_get_fps(unsigned *limit, double *native, bool *save_error);
 double nativegame_measured_fps(void);
+bool nativegame_get_options(game_options_t *out);
+bool nativegame_set_options(game_options_t options);
+void nativegame_set_fast_forward(bool enabled);
+bool nativegame_fast_forward(void);
+void nativegame_diagnostics(double *fps,double *video_fps,unsigned *ram_kib);
+int nativegame_state_result(void); // 0 pending/none, 1 saved, 2 loaded, -1 failed
 #endif

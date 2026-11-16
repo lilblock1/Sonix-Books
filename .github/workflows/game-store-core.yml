@@ -73,7 +73,10 @@ jobs:
           assert 'Requesting program interpreter' not in s
           assert all(tuple(map(int,v)) <= (2,19) for v in re.findall(r'GLIBC_(\d+)\.(\d+)',s))
           needed=set(re.findall(r'Shared library: \[([^\]]+)\]',s))
-          assert needed <= {'libc.so.6','libm.so.6','libgcc_s.so.1'},needed
+          import os
+          allowed={'libc.so.6','libm.so.6','libgcc_s.so.1'}
+          if os.environ['CORE_ID']=='quicknes': allowed.add('ld.so.1') # additionally checked against pinned firmware below
+          assert needed <= allowed,needed
           for symbol in ('retro_api_version','retro_init','retro_deinit','retro_load_game','retro_unload_game','retro_run','retro_get_system_info','retro_get_system_av_info','retro_set_environment','retro_set_video_refresh','retro_set_input_poll','retro_set_input_state','retro_set_audio_sample','retro_set_audio_sample_batch','retro_serialize_size','retro_serialize','retro_unserialize','retro_get_memory_data','retro_get_memory_size'):
               assert any(re.search(r'\b'+symbol+r'$',line) and ' UND ' not in line and ' GLOBAL ' in line for line in s.splitlines()),symbol
           PY
@@ -102,6 +105,32 @@ jobs:
           done
           test -s "$staging/LICENSE"
           cp core-elf.txt "$staging/core-elf.txt"
+      - name: Verify QuickNES dependencies against the exact tested R1 filesystem
+        if: env.CORE_ID == 'quicknes'
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full squashfs-tools python3-pyelftools
+          curl --fail --location --retry 3 --max-time 180 \
+            https://github.com/lilblock1/Sonix-Books/releases/download/v0.3.0.76-test/r1.upt \
+            --output verified-r1.upt
+          echo 'd69894ae73fe770394f926cc81cde6223d4e87a8380d3df22d6b4b8e6412eb4a  verified-r1.upt' | sha256sum --check
+          7z x verified-r1.upt -or1-iso -y >/dev/null
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0,'firmware-contract/sonix-player/tools')
+          from r1_candidate import verify_images
+          _,images=verify_images(Path('r1-iso/ota_v0'))
+          Path('verified-root.squashfs').write_bytes(images['rootfs.squashfs'])
+          PY
+          unsquashfs -no-progress -d r1-root verified-root.squashfs lib usr/lib
+          test -e r1-root/lib/ld.so.1 || test -e r1-root/usr/lib/ld.so.1
+          mkdir -p abi-empty
+          /usr/bin/python3 firmware-contract/sonix-player/tools/system-libs/abicheck.py \
+            "$PWD/r1-root" "$PWD/abi-empty" "$PWD/core-stage/Games/quicknes/core.so" > quicknes-r1-abi.txt
+          cat quicknes-r1-abi.txt
+          cp quicknes-r1-abi.txt core-stage/Games/quicknes/
       - name: Create independent package and verify real SD installer
         run: |
           set -eu

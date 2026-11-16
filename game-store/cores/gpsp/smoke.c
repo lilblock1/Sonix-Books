@@ -7,12 +7,15 @@
 #include <stdlib.h>
 #include <string.h>
 static unsigned frames,audio,polls,reads,red_frames;
+static bool force_interpreter;
 static bool env(unsigned cmd,void *data){
 	if(!data)return false;
 	switch(cmd){
 	case RETRO_ENVIRONMENT_GET_CAN_DUPE: *(bool*)data=true;return true;
 	case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:return *(unsigned*)data==RETRO_PIXEL_FORMAT_RGB565;
-	case RETRO_ENVIRONMENT_GET_VARIABLE:((struct retro_variable*)data)->value=NULL;return false;
+	case RETRO_ENVIRONMENT_GET_VARIABLE:{struct retro_variable *v=data;v->value=NULL;
+		if(force_interpreter&&!strcmp(v->key,"gpsp_drc")){v->value="disabled";return true;}
+		return false;}
 	case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:*(bool*)data=false;return true;
 	case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:*(const char**)data=".";return true;
 	default:return false;
@@ -29,7 +32,8 @@ static void poll(void){++polls;}
 static int16_t input(unsigned port,unsigned dev,unsigned index,unsigned id){(void)port;(void)dev;(void)index;(void)id;++reads;return 0;}
 #define LOAD(ret,name,params) ret (*name) params=(ret (*) params)dlsym(core,#name);assert(name)
 int main(int argc,char **argv){
-	assert(argc==3);void *core=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);
+	assert(argc==3||argc==4);if(argc==4)assert(!strcmp(argv[3],"jit")||!strcmp(argv[3],"interp"));
+	force_interpreter=argc==4&&!strcmp(argv[3],"interp");void *core=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);
 	if(!core){fprintf(stderr,"%s\n",dlerror());return 1;}
 	LOAD(unsigned,retro_api_version,(void));
 	LOAD(void,retro_set_environment,(retro_environment_t));
@@ -52,12 +56,16 @@ int main(int argc,char **argv){
 	struct retro_system_info si={0};retro_get_system_info(&si);assert(si.need_fullpath&&strstr(si.valid_extensions,"gba"));
 	struct retro_game_info info={.path=argv[2]};
 	assert(retro_load_game(&info));
+	unsigned (*jit_active)(void)=(unsigned (*)(void))dlsym(core,"retro_sonix_jit_active");
+	if(argc==4){assert(jit_active);assert(jit_active()==(unsigned)!force_interpreter);}
 	struct retro_system_av_info av={0};retro_get_system_av_info(&av);assert(av.timing.fps>55&&av.timing.fps<65&&av.timing.sample_rate>8000);
 	for(unsigned i=0;i<120;++i)retro_run();
 	assert(frames>100&&audio>1000&&polls>100&&reads>0);
 	assert(red_frames>0);
 	size_t n=retro_serialize_size();assert(n>0&&n<=2*1024*1024);
 	void *state=malloc(n);assert(state&&retro_serialize(state,n)&&retro_unserialize(state,n));free(state);
+	for(unsigned i=0;i<10;++i)retro_run();
+	assert(frames>120);if(argc==4)assert(jit_active()==(unsigned)!force_interpreter);
 	assert(retro_get_memory_data(RETRO_MEMORY_SAVE_RAM)&&retro_get_memory_size(RETRO_MEMORY_SAVE_RAM)==0x20000);
 	retro_unload_game();retro_deinit();dlclose(core);
 	printf("gpSP smoke passed: %u frames, %u red-pixel frames, %u audio sample frames, %u input reads, %zu-byte save state\n",frames,red_frames,audio,reads,n);

@@ -40,18 +40,5 @@ new="""	   // Convert only pixels the frontend will display. Both widths are
 		   width, height, Nes_Emu::image_width * sizeof(uint16_t));"""
 assert s.count(old)==1,"Pinned RGB565 loop changed"
 s=s.replace(old,new)
-# Unroll mono expansion; never alter stereo effects, sample count or sample rate.
-old="""			for (long i = 0; i < read_samples; i++)
-				out_samples[(i << 1)] = out_samples[(i << 1) + 1] = samples[i];"""
-new="""			long i = 0;
-			for (; i + 3 < read_samples; i += 4)
-			{
-				out_samples[2*i]   = out_samples[2*i+1] = samples[i];
-				out_samples[2*i+2] = out_samples[2*i+3] = samples[i+1];
-				out_samples[2*i+4] = out_samples[2*i+5] = samples[i+2];
-				out_samples[2*i+6] = out_samples[2*i+7] = samples[i+3];
-			}
-			for (; i < read_samples; ++i)
-				out_samples[2*i] = out_samples[2*i+1] = samples[i];"""
-assert s.count(old)==1,"Pinned mono loop changed"
-p.write_text(s.replace(old,new))
+# Keep the upstream audio path unchanged until its output is reproducible.
+p.write_text(s)

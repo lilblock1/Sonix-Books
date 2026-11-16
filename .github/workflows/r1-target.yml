@@ -246,7 +246,9 @@ jobs:
           Review the notes, keep a working installer, charge to at least 50%, and keep power stable.
           Stable remains a separate channel. No automatic installation occurs.
 
-          Update 12 test: redesigned Game Store with game/emulator categories, logos, package details and explicit install/update confirmation. The Game Launcher uses title-specific controls (2048 has only directions, Undo, New game and Exit) and logo tiles.
+          Update 13 test: per-ROM FPS caps, native timing, optimized framebuffer scaling, standard 48 kHz game audio, adjustable audio buffers, and adaptive display frameskip. New in-game Settings > Performance & controls includes presets, FPS/RAM/battery diagnostics, four manual save slots separate from automatic resume, mirrored emulator controls, optional muted 1.5x fast-forward, and gpSP interpreter selection (next launch).
+          Game settings and saves remain on microSD. Lower FPS caps slow emulation and audio pitch; display frameskip does not skip emulated game logic. Interrupted-session recovery can skip a suspect automatic save and temporarily use gpSP interpreter mode. This is not full process isolation. Hardware performance and touch behavior require testing.
+          Existing Update 12 Game Store features remain available.
           Refresh the Game Store to discover new games, versions and independently versioned store appearance packs without flashing firmware. Appearance packs contain bounded display settings only; invalid packs fall back to a working layout. Artwork is optional and falls back to locally drawn or built-in icons. Existing Update 11 packages remain compatible.
           Optional reader engines, fonts and dictionaries are distributed as separate verified SD packages. Use Downloadable Extras after reboot to select them.
           Existing custom files and save files are outside managed package generations. Native game execution and R1 controls still require physical testing.
@@ -258,4 +260,4 @@ jobs:
             native-r1/Sonix-Books-Native-Readers-r1.zip native-r1/Sonix-Books-Native-Readers-r1.zip.sha256 \
             extras/reading-fonts/Sonix-Books-Fonts.zip extras/reading-fonts/Sonix-Books-Fonts.zip.sha256 \
             dictionary-pack/Sonix-Books-Dictionary.zip dictionary-pack/Sonix-Books-Dictionary.zip.sha256 \
-            --target "$SOURCE_SHA" --prerelease --latest=false --title "Sonix Books $tag (Update 12 R1 test)" --notes-file test-notes.md
+            --target "$SOURCE_SHA" --prerelease --latest=false --title "Sonix Books $tag (Update 13 R1 test)" --notes-file test-notes.md

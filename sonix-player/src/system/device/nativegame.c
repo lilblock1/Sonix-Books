@@ -49,8 +49,11 @@ typedef struct {
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static bool busy,stop_requested,failed;
 static bool paused,fps_dirty,fps_save_error;
-static unsigned fps_limit;
-static double native_fps,measured_fps;
+static game_options_t options;
+static bool fast_forward,gpsp_core,session_interpreter,skip_video;
+static double native_fps,measured_fps,measured_video_fps;
+static unsigned available_ram_kib,rendered_frames,request_slot;
+static int state_result;
 static int request;
 static uint16_t keys,*latest;
 static uint32_t serial;
@@ -70,15 +73,31 @@ void nativegame_pause(bool on) {pthread_mutex_lock(&lock);paused=on;keys=0;pthre
 bool nativegame_set_fps(unsigned fps) {
 	if(!game_fps_valid(fps))return false;
 	pthread_mutex_lock(&lock);bool ok=busy&&!stop_requested&&native_fps>0;
-	if(ok&&fps_limit!=fps){fps_limit=fps;fps_dirty=true;fps_save_error=false;}
+	if(ok&&options.fps!=fps){options.fps=(uint8_t)fps;fps_dirty=true;fps_save_error=false;}
 	pthread_mutex_unlock(&lock);return ok;
 }
 void nativegame_get_fps(unsigned *limit,double *native,bool *save_error) {
-	pthread_mutex_lock(&lock);if(limit)*limit=fps_limit;if(native)*native=native_fps;if(save_error)*save_error=fps_save_error;pthread_mutex_unlock(&lock);
+	pthread_mutex_lock(&lock);if(limit)*limit=options.fps;if(native)*native=native_fps;if(save_error)*save_error=fps_save_error;pthread_mutex_unlock(&lock);
 }
 double nativegame_measured_fps(void) {pthread_mutex_lock(&lock);double fps=measured_fps;pthread_mutex_unlock(&lock);return fps;}
-void nativegame_save(void) {pthread_mutex_lock(&lock);request=1;pthread_mutex_unlock(&lock);}
-void nativegame_load(void) {pthread_mutex_lock(&lock);request=2;pthread_mutex_unlock(&lock);}
+bool nativegame_get_options(game_options_t *out) {
+	pthread_mutex_lock(&lock);bool ready=busy&&native_fps>0;if(out)*out=options;pthread_mutex_unlock(&lock);return ready;
+}
+bool nativegame_set_options(game_options_t value) {
+	if(!game_options_valid(value))return false;
+	pthread_mutex_lock(&lock);bool ok=busy&&!stop_requested&&native_fps>0;
+	if(ok&&memcmp(&options,&value,sizeof(value))){options=value;fps_dirty=true;fps_save_error=false;}
+	pthread_mutex_unlock(&lock);return ok;
+}
+void nativegame_set_fast_forward(bool enabled) {pthread_mutex_lock(&lock);fast_forward=busy&&!stop_requested&&enabled;pthread_mutex_unlock(&lock);}
+bool nativegame_fast_forward(void) {pthread_mutex_lock(&lock);bool on=fast_forward;pthread_mutex_unlock(&lock);return on;}
+void nativegame_diagnostics(double *fps,double *video_fps,unsigned *ram_kib) {
+	pthread_mutex_lock(&lock);if(fps)*fps=measured_fps;if(video_fps)*video_fps=measured_video_fps;if(ram_kib)*ram_kib=available_ram_kib;pthread_mutex_unlock(&lock);
+}
+int nativegame_state_result(void){pthread_mutex_lock(&lock);int result=state_result;pthread_mutex_unlock(&lock);return result;}
+static void queue_state(int action){pthread_mutex_lock(&lock);if(busy&&!stop_requested&&native_fps>0){request=action;request_slot=options.slot;state_result=0;}pthread_mutex_unlock(&lock);}
+void nativegame_save(void){queue_state(1);}
+void nativegame_load(void){queue_state(2);}
 bool nativegame_present(uint16_t *pixels,uint32_t *seen) {
 	pthread_mutex_lock(&lock);
 	bool changed=latest && serial!=*seen;
@@ -92,7 +111,9 @@ static bool environment(unsigned cmd,void *data) {
 	case 9: *(const char**)data=core_dir;return true; // system/BIOS files
 	case 10: if(*(unsigned*)data>2)return false;format=*(unsigned*)data;return true;
 	case 15: { // GET_VARIABLE: default core options only
-		struct {const char *key,*value;} *v=data;v->value=NULL;return false;
+		struct {const char *key,*value;} *v=data;v->value=NULL;
+		if(gpsp_core&&session_interpreter&&v->key&&!strcmp(v->key,"gpsp_drc")){v->value="disabled";return true;}
+		return false;
 	}
 	case 17: *(bool*)data=false;return true;
 	case 18: no_game=*(bool*)data;return true;
@@ -103,7 +124,7 @@ static bool environment(unsigned cmd,void *data) {
 	}
 }
 static void video(const void *p,unsigned w,unsigned h,size_t pitch) {
-	if(!p || p==(void*)-1 || !w || !h || w>1024 || h>1024 || pitch<w*(format==1?4u:2u))return;
+	if(skip_video || !p || p==(void*)-1 || !w || !h || w>1024 || h>1024 || pitch<w*(format==1?4u:2u))return;
 	unsigned dw=NATIVEGAME_W,dh=(unsigned)((uint64_t)h*dw/w);
 	if(dh>NATIVEGAME_H_PIX){dh=NATIVEGAME_H_PIX;dw=(unsigned)((uint64_t)w*dh/h);}
 	if(!dw||!dh)return;
@@ -139,7 +160,7 @@ static void video(const void *p,unsigned w,unsigned h,size_t pitch) {
 				else {uint16_t q;memcpy(&q,src+i*2,2);dst[x]=format==2?q:(uint16_t)(((q&0x7c00)<<1)|((q&0x3e0)<<1)|((q&0x200)>>4)|(q&31));}
 			}
 		}
-		++serial;
+		++serial;++rendered_frames;
 	}
 	pthread_mutex_unlock(&lock);
 }
@@ -255,12 +276,17 @@ static bool file_write(int dir,const char *name,const void *data,size_t length) 
 	if(!ok)unlinkat(dir,tmp,0);
 	return ok;
 }
-static void state(core_t *c,int saves,const char *name,bool load) {
-	size_t n=c->retro_serialize_size();if(saves<0||!n||n>STATE_MAX)return;
-	void *buf=malloc(n);if(!buf)return;
-	if(load){if(file_read(saves,name,buf,n))c->retro_unserialize(buf,n);}
-	else if(c->retro_serialize(buf,n))file_write(saves,name,buf,n);
-	free(buf);
+static bool state(core_t *c,int saves,const char *name,bool load) {
+	size_t n=c->retro_serialize_size();if(saves<0||!n||n>STATE_MAX)return false;
+	void *buf=malloc(n);if(!buf)return false;
+	bool ok=load?(file_read(saves,name,buf,n)&&c->retro_unserialize(buf,n)):(c->retro_serialize(buf,n)&&file_write(saves,name,buf,n));
+	free(buf);return ok;
+}
+static unsigned ram_available(void){
+	FILE *f=fopen("/proc/meminfo","r");if(!f)return 0;
+	char line[128];unsigned n=0;
+	while(fgets(line,sizeof(line),f))if(sscanf(line,"MemAvailable: %u kB",&n)==1)break;
+	fclose(f);return n;
 }
 static void sram(core_t *c,int saves,const char *name,bool load) {
 	size_t n=c->retro_get_memory_size(0);void *p=c->retro_get_memory_data(0);
@@ -270,7 +296,7 @@ static void sram(core_t *c,int saves,const char *name,bool load) {
 }
 static void *run(void *arg) {
 	session_t *s=arg;core_t c={0};void *lib=NULL,*rom_data=NULL;bool init=false,loaded=false;int saves=-1;
-	char card[64],core[1100],rom[1100],state_name[80],save_name[80],fps_name[80],digest[65],generation[SDPACKAGES_VERSION],version[SDPACKAGES_VERSION];
+	char card[64],core[1100],rom[1100],state_name[80],save_name[80],fps_name[80],options_name[80],digest[65],state_digest[65],generation[SDPACKAGES_VERSION],version[SDPACKAGES_VERSION];
 	snprintf(card,sizeof(card),"/proc/self/fd/%d/.",s->card);
 	if(!sdpackages_game_core(card,s->id,core,sizeof(core))||!sdpackages_game_generation(card,s->id,generation,version))goto done;
 	memcpy(core_dir,core,strlen(core)+1);*strrchr(core_dir,'/')=0;
@@ -281,9 +307,15 @@ static void *run(void *arg) {
 	snprintf(fps_name,sizeof(fps_name),"%s.fps",digest);
 	uint8_t stored_fps=0;
 	if(!file_read(saves,fps_name,&stored_fps,sizeof(stored_fps))||!game_fps_valid(stored_fps))stored_fps=0;
+	snprintf(options_name,sizeof(options_name),"%s.options",digest);
+	game_options_t stored=game_options_default();stored.fps=stored_fps;
+	game_options_t disk;
+	if(file_read(saves,options_name,&disk,sizeof(disk))&&game_options_valid(disk))stored=disk;
+	gpsp_core=!strcmp(s->id,"gpsp");session_interpreter=stored.jit==GAME_JIT_INTERPRETER;skip_video=false;rendered_frames=0;
 	// Save states are engine-version specific; battery saves survive updates.
 	sha256_init(&hash);sha256_update(&hash,s->rom,strlen(s->rom)+1);sha256_update(&hash,version,strlen(version));sha256_final_hex(&hash,digest);
 	snprintf(state_name,sizeof(state_name),"%s.state",digest);
+	memcpy(state_digest,digest,sizeof(state_digest));
 	lib=open_core(core);if(!lib||!get_core(lib,&c))goto done;
 	format=0;no_game=false;have_audio=false;sound_used=0;
 	c.retro_set_environment(environment);c.retro_set_video_refresh(video);c.retro_set_audio_sample(sample);
@@ -307,40 +339,57 @@ static void *run(void *arg) {
 	loaded=true;av_info_t av={0};c.retro_get_system_av_info(&av);
 	if(!(av.timing.fps>=10.0&&av.timing.fps<=120.0)||av.geometry.max_width>1024||av.geometry.max_height>1024)goto done;
 	sram(&c,saves,save_name,true);state(&c,saves,state_name,true);
-	pthread_mutex_lock(&lock);native_fps=av.timing.fps;fps_limit=stored_fps;pthread_mutex_unlock(&lock);
-	int audio_rate=0;
-	unsigned perf_frames=0;struct timespec perf_start={0};
+	pthread_mutex_lock(&lock);native_fps=av.timing.fps;options=stored;pthread_mutex_unlock(&lock);
+	int audio_rate=0;unsigned audio_buffer=0;
+	unsigned perf_frames=0,perf_rendered=0;struct timespec perf_start={0};
+	bool overloaded=false,previous_skip=false;
 	for(;;){
 		pthread_mutex_lock(&lock);
 		bool stop=stop_requested,on_hold=paused,dirty=fps_dirty;
-		unsigned limit=fps_limit;
+		game_options_t opt=options;bool ff=fast_forward;
+		unsigned slot=request_slot;
 		int req=request;request=0;fps_dirty=false;
 		pthread_mutex_unlock(&lock);
 		if(dirty){
-			uint8_t val=(uint8_t)limit;
-			bool ok=file_write(saves,fps_name,&val,sizeof(val));
+			bool ok=file_write(saves,options_name,&opt,sizeof(opt));
 			pthread_mutex_lock(&lock);fps_save_error=!ok;pthread_mutex_unlock(&lock);
 		}
 		if(stop)break;
-		if(req){state(&c,saves,state_name,req==2);if(req==2){sound_used=0;game_resampler_reset(&audio_resampler,(unsigned)audio_rate,GAME_PCM_RATE);}}
+		if(req){
+			char slot_name[80];
+			if(slot)snprintf(slot_name,sizeof(slot_name),"%s.slot%u.state",state_digest,slot);
+			else snprintf(slot_name,sizeof(slot_name),"%s",state_name);
+			bool ok=state(&c,saves,slot_name,req==2);
+			pthread_mutex_lock(&lock);state_result=ok?req:-1;pthread_mutex_unlock(&lock);
+			if(req==2){sound_used=0;game_resampler_reset(&audio_resampler,(unsigned)audio_rate,GAME_PCM_RATE);}
+		}
 		if(on_hold){
 			if(have_audio){audio_external_end();have_audio=false;}
-			sound_used=0;audio_rate=0;perf_frames=0;
+			sound_used=0;audio_rate=0;perf_frames=0;overloaded=previous_skip=false;
 			struct timespec delay={0,20000000};nanosleep(&delay,NULL);continue;
 		}
 		int rate=0;
-		if(av.timing.sample_rate>=8000.0&&av.timing.sample_rate<=96000.0)
-			rate=game_audio_rate(av.timing.fps,av.timing.sample_rate,limit);
-		if(rate!=audio_rate){
+		if(!ff&&av.timing.sample_rate>=8000.0&&av.timing.sample_rate<=96000.0)
+			rate=game_audio_rate(av.timing.fps,av.timing.sample_rate,opt.fps);
+		if(rate!=audio_rate||audio_buffer!=opt.buffer_ms){
 			if(have_audio)audio_external_end();
-			have_audio=false;audio_rate=rate;
+			have_audio=false;audio_rate=rate;audio_buffer=opt.buffer_ms;
 			sound_used=0;game_resampler_reset(&audio_resampler,(unsigned)rate,GAME_PCM_RATE);
-			if(rate>0&&rate<=96000)have_audio=audio_external_begin_latency(GAME_PCM_RATE,2,16,64);
+			if(rate>0&&rate<=96000)have_audio=audio_external_begin_latency(GAME_PCM_RATE,2,16,(int)audio_buffer);
 		}
-		int64_t period=game_period_ns(av.timing.fps,limit);
+		int64_t period=game_period_ns(av.timing.fps,opt.fps);
+		// Explicit session-only 1.5x mode; ordinary limits remain respected.
+		if(ff)period=(period*2+2)/3;
+		skip_video=game_should_skip(ff?GAME_SKIP_HALF:opt.skip,previous_skip,overloaded);
+		previous_skip=skip_video;
 		struct timespec a,b;clock_gettime(CLOCK_MONOTONIC,&a);
-		if(!perf_frames)perf_start=a;
-		c.retro_run();flush_audio();++perf_frames;
+		if(!perf_frames){perf_start=a;perf_rendered=rendered_frames;}
+		c.retro_run();
+		clock_gettime(CLOCK_MONOTONIC,&b);
+		int64_t work=(int64_t)(b.tv_sec-a.tv_sec)*1000000000+b.tv_nsec-a.tv_nsec;
+		// Keep overload latched across a skipped frame, until a rendered frame is cheap.
+		if(!skip_video)overloaded=work>period*9/10;
+		flush_audio();++perf_frames;
 		// Start-to-start cap, including PCM blocking; never catch up by
 		// running bursts after a slow frame. Retry interrupted sleeps.
 		for(;;){
@@ -353,7 +402,7 @@ static void *run(void *arg) {
 		}
 		clock_gettime(CLOCK_MONOTONIC,&b);
 		int64_t span=(int64_t)(b.tv_sec-perf_start.tv_sec)*1000000000+b.tv_nsec-perf_start.tv_nsec;
-		if(span>=1000000000){pthread_mutex_lock(&lock);measured_fps=perf_frames*1000000000.0/span;pthread_mutex_unlock(&lock);perf_frames=0;}
+		if(span>=1000000000){unsigned ram=ram_available();pthread_mutex_lock(&lock);measured_fps=perf_frames*1000000000.0/span;measured_video_fps=(rendered_frames-perf_rendered)*1000000000.0/span;available_ram_kib=ram;pthread_mutex_unlock(&lock);perf_frames=0;}
 	}
 	state(&c,saves,state_name,false);sram(&c,saves,save_name,false);
 done:
@@ -383,7 +432,7 @@ bool nativegame_start(const char *id,const char *rom) {
 	if(!latest){close(s->card);free(s);pthread_mutex_unlock(&lock);return false;}
 	snprintf(s->id,sizeof(s->id),"%s",id);if(rom)snprintf(s->rom,sizeof(s->rom),"%s",rom);
 	busy=true;failed=stop_requested=false;request=0;keys=0;serial=0;
-	paused=fps_dirty=fps_save_error=false;fps_limit=0;native_fps=measured_fps=0;
+	paused=fps_dirty=fps_save_error=fast_forward=false;options=game_options_default();native_fps=measured_fps=measured_video_fps=0;available_ram_kib=0;request_slot=0;state_result=0;
 	pthread_mutex_unlock(&lock);
 	audio_stop();
 	pthread_t thread;

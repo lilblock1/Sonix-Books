@@ -1,0 +1,19 @@
+{
+  "name": "WaveCore OS (working name)",
+  "target": "HiBy R1",
+  "reference": {
+    "tag": "v0.3.0.99-test",
+    "commit": "2920fe1c5ca3b4145b4d06251492ab87381e9817",
+    "url": "https://github.com/lilblock1/Sonix-Books/releases/download/v0.3.0.99-test/r1.upt",
+    "sha256": "66694aa73ed3d3c9a096f88145e9adefecdf11d8207082319ce4276b9605a0e6"
+  },
+  "buildroot": {
+    "ref": "2025.02.12",
+    "commit": "137a566bf5353831d97c068a4c22e6df5b4d07a0"
+  },
+  "policy": {
+    "flashable": false,
+    "publish": false,
+    "hardware_verified": false
+  }
+}

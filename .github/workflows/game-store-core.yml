@@ -15,10 +15,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Check out the exact Update 11 firmware package contract
+      - name: Check out the exact Update 12 firmware package contract
         uses: actions/checkout@v4
         with:
-          ref: e6495bbc064ba0a15f34be21ec53ebae4e634470
+          ref: 2d5f434b31a9c582ed826c1fb31c5914f0a846d0
           path: firmware-contract
       - uses: actions/cache/restore@v4
         with:
@@ -37,11 +37,19 @@ jobs:
           with open(os.environ['GITHUB_ENV'],'a') as f:
               f.write('CORE_ID='+r['id']+'\nCORE_VERSION='+r['version']+'\n')
           PY
+      - name: Check out pinned QuickNES source
+        if: env.CORE_ID == 'quicknes'
+        uses: actions/checkout@v4
+        with:
+          repository: libretro/QuickNES_Core
+          ref: 26bb785c9deddb66a17717b21bb4e328f03ade32
+          path: quicknes-upstream
+          persist-credentials: false
       - name: Install fallback MIPS compiler if the firmware cache is unavailable
         run: |
           if [ ! -x sonix-player/rockbox-toolchain/bin/mipsel-rockbox-linux-gnu-gcc ]; then
             sudo apt-get update
-            sudo apt-get install -y gcc-mipsel-linux-gnu binutils-mipsel-linux-gnu libc6-dev-mipsel-cross
+            sudo apt-get install -y gcc-mipsel-linux-gnu g++-mipsel-linux-gnu binutils-mipsel-linux-gnu libc6-dev-mipsel-cross
           fi
       - name: Compile MIPS core and verify exported ABI and runtime dependencies
         run: |
@@ -50,10 +58,11 @@ jobs:
           if [ ! -x "${compiler}gcc" ]; then compiler=mipsel-linux-gnu-; fi
           command -v "${compiler}gcc"
           dir="game-store/cores/$CORE_ID"
-          make -C "$dir" check
+          make -C "$dir" check UPSTREAM="$PWD/quicknes-upstream"
           staging="$PWD/core-stage/Games/$CORE_ID"
           mkdir -p "$staging"
-          make -C "$dir" core CC="${compiler}gcc" OUT="$staging/core.so" CFLAGS="-Os -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -fdata-sections"
+          if [ "$CORE_ID" = quicknes ]; then command -v "${compiler}g++"; fi
+          make -C "$dir" core CC="${compiler}gcc" CXX="${compiler}g++" UPSTREAM="$PWD/quicknes-upstream" OUT="$staging/core.so" CFLAGS="-Os -march=mips32r2 -mno-madd4 -mplt -ffunction-sections -fdata-sections"
           "${compiler}readelf" -h -d -l -V -Ws "$staging/core.so" > core-elf.txt
           python3 - <<'PY'
           import re
@@ -65,12 +74,19 @@ jobs:
           assert all(tuple(map(int,v)) <= (2,19) for v in re.findall(r'GLIBC_(\d+)\.(\d+)',s))
           needed=set(re.findall(r'Shared library: \[([^\]]+)\]',s))
           assert needed <= {'libc.so.6','libm.so.6','libgcc_s.so.1'},needed
-          for symbol in ('retro_api_version','retro_init','retro_deinit','retro_load_game','retro_unload_game','retro_run','retro_get_system_info','retro_get_system_av_info','retro_set_environment','retro_set_video_refresh','retro_set_input_poll','retro_set_input_state','retro_serialize','retro_unserialize'):
+          for symbol in ('retro_api_version','retro_init','retro_deinit','retro_load_game','retro_unload_game','retro_run','retro_get_system_info','retro_get_system_av_info','retro_set_environment','retro_set_video_refresh','retro_set_input_poll','retro_set_input_state','retro_set_audio_sample','retro_set_audio_sample_batch','retro_serialize_size','retro_serialize','retro_unserialize','retro_get_memory_data','retro_get_memory_size'):
               assert any(re.search(r'\b'+symbol+r'$',line) and ' UND ' not in line and ' GLOBAL ' in line for line in s.splitlines()),symbol
           PY
           "${compiler}strip" --strip-unneeded "$staging/core.so"
           mkdir -p "$staging/source"
-          cp "$dir"/core.c "$dir"/Makefile "$staging/source/"
+          if [ "$CORE_ID" = quicknes ]; then
+            git -C quicknes-upstream archive --format=tar.gz --prefix=QuickNES_Core/ HEAD > "$staging/source/quicknes-upstream.tar.gz"
+            cp "$dir"/Makefile "$dir"/smoke.c "$dir"/UPSTREAM.txt "$staging/source/"
+            cp .github/workflows/game-store-core.yml "$staging/source/"
+            cp quicknes-upstream/LICENSE "$staging/LICENSE"
+          else
+            cp "$dir"/core.c "$dir"/Makefile "$staging/source/"
+          fi
           # Optional title artwork: fixed RGB565, no image decoder on R1.
           if [ -f "$dir/logo.py" ]; then
             python3 "$dir/logo.py" "$staging/logo.rgb565"
@@ -82,7 +98,7 @@ jobs:
             test "$(wc -c < "$staging/logo.rgb565")" -eq 4608
           fi
           for license in LICENSE LICENSE.txt COPYING; do
-            if [ -f "$license" ]; then cp "$license" "$staging/LICENSE"; break; fi
+            if [ ! -f "$staging/LICENSE" ] && [ -f "$license" ]; then cp "$license" "$staging/LICENSE"; break; fi
           done
           test -s "$staging/LICENSE"
           cp core-elf.txt "$staging/core-elf.txt"
@@ -119,7 +135,7 @@ jobs:
           from pathlib import Path
           p=Path('game-artifact/report.json')
           r=json.loads(p.read_text())
-          r.update(runtime_abi=1,hardware_verified=False,firmware_test='v0.3.0.49-test')
+          r.update(runtime_abi=1,hardware_verified=False,firmware_test='v0.3.0.76-test')
           p.write_text(json.dumps(r,indent=2)+'\n')
           PY
       - uses: actions/upload-artifact@v4
@@ -154,7 +170,7 @@ jobs:
           request=json.loads(Path('game-store/core-request.json').read_text())
           report=json.loads(Path('candidate/report.json').read_text())
           assert request.get('channel')=='device-test'
-          assert request['id']=='2048' and request['version'] in ('v1.0.0','v1.1.0')
+          assert (request['id'],request['version']) in {('2048','v1.0.0'),('2048','v1.1.0'),('quicknes','v1.0.0')}
           assert report['version']==request['version'] and report['runtime_abi']==1 and report['hardware_verified'] is False
           asset='sonix-game-v1-'+request['id']+'-'+request['version']+'.spk'
           assert hashlib.sha256((Path('candidate')/asset).read_bytes()).hexdigest()==report['sha256']
@@ -173,4 +189,8 @@ jobs:
             test "$(wc -c < "candidate/$logo")" -eq 4608
             gh release upload sonix-game-store-v1 "candidate/$logo"
           fi
-          gh release upload sonix-game-store-v1 "candidate/$asset"
+          if [ "$asset" = sonix-game-v1-quicknes-v1.0.0.spk ]; then
+            gh release upload sonix-game-store-v1 "candidate/$asset#sonix-ui1|emulator|QuickNES|Experimental NES and Famicom emulator. Use your own .nes ROMs."
+          else
+            gh release upload sonix-game-store-v1 "candidate/$asset"
+          fi

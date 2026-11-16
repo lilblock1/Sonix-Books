@@ -5,6 +5,11 @@ CXX ?= c++
 OUT ?= core.so
 HOST_CC ?= cc
 CFLAGS ?= -O2
+# Do not propagate command-line CFLAGS via MAKEFLAGS: upstream must append
+# its required feature macros, RGB565 support and PIC flags. Pass target
+# tuning through CODE_DEFINES explicitly instead.
+MAKEOVERRIDES :=
+unexport CFLAGS CXXFLAGS
 .PHONY: check core
 check:
 	$(MAKE) -C "$(UPSTREAM)" clean platform=unix HAVE_DYNAREC=0 CPU_ARCH=

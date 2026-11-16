@@ -8,5 +8,6 @@
   "upstream": "5819380c2ffb0900219d700a382ee68c464ebb99",
   "mode": "interpreter",
   "rom_cache_mib": 4,
-  "build_attempt": 1
+  "build_attempt": 2,
+  "build_fix": "Preserve upstream feature macros and PIC with isolated recursive make flags"
 }

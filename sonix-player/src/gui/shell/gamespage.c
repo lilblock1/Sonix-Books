@@ -245,7 +245,7 @@ static void update_advanced(void){
 	snprintf(text,sizeof(text),"Display skip: %s  |  Audio: %u ms\nOverlay: %s  |  Slot: %u\n%s  |  %s layout\nFast-forward: %s",skips[v.skip],v.buffer_ms,v.overlay?"On":"Off",v.slot+1,jit,v.layout?"Mirrored":"Standard",nativegame_fast_forward()?"1.5x, muted":"Off");
 	if(strcmp(lv_label_get_text(advanced_value),text))lv_label_set_text(advanced_value,text);
 	int result=nativegame_state_result();
-	const char *msg=result==1?"State saved.":result==2?"State loaded.":result<0?"Save/load failed or selected slot is empty.":"Presets adjust rendering and buffer only. JIT changes take effect on next launch.";
+	const char *msg=result==1?"State saved.":result==2?"State loaded.":result<0?"Save/load failed or selected slot is empty.":nativegame_recovered()?(!strcmp(chosen,"gpsp")?"Recovery: auto-state skipped; interpreter this session. Manual slots remain.":"Recovery: auto-state skipped. Manual slots remain."):"Presets adjust rendering and buffer only. Manual slots are separate from autosave. JIT applies next launch.";
 	if(strcmp(lv_label_get_text(advanced_notice),msg))lv_label_set_text(advanced_notice,msg);
 }
 static void advanced_action(lv_event_t *e){
@@ -306,7 +306,7 @@ static void update_diagnostics(void){
 		char battery[16],mem[16];if(d.percent>=0&&d.percent<=100)snprintf(battery,sizeof(battery),"%d%%",d.percent);else snprintf(battery,sizeof(battery),"--");
 		if(ram)snprintf(mem,sizeof(mem),"%u MB",ram/1024);else snprintf(mem,sizeof(mem),"--");
 		snprintf(text,sizeof(text),"%.0f FPS / %.0f video | RAM %s | %s",fps,video,mem,battery);
-	}else snprintf(text,sizeof(text),"%s",nativegame_fast_forward()?"Fast-forward 1.5x (muted)":!strcmp(chosen,"2048")?"Move tiles  |  Auto-save on exit":"Hold direction and action together");
+	}else snprintf(text,sizeof(text),"%s",nativegame_fast_forward()?"Fast-forward 1.5x (muted)":nativegame_recovered()?"Recovery mode | See game settings":!strcmp(chosen,"2048")?"Move tiles  |  Auto-save on exit":"Hold direction and action together");
 	if(strcmp(lv_label_get_text(control_hint),text))lv_label_set_text(control_hint,text);
 }
 static void create_game_settings(void){

@@ -50,7 +50,7 @@ static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static bool busy,stop_requested,failed;
 static bool paused,fps_dirty,fps_save_error;
 static unsigned fps_limit;
-static double native_fps;
+static double native_fps,measured_fps;
 static int request;
 static uint16_t keys,*latest;
 static uint32_t serial;
@@ -76,6 +76,7 @@ bool nativegame_set_fps(unsigned fps) {
 void nativegame_get_fps(unsigned *limit,double *native,bool *save_error) {
 	pthread_mutex_lock(&lock);if(limit)*limit=fps_limit;if(native)*native=native_fps;if(save_error)*save_error=fps_save_error;pthread_mutex_unlock(&lock);
 }
+double nativegame_measured_fps(void) {pthread_mutex_lock(&lock);double fps=measured_fps;pthread_mutex_unlock(&lock);return fps;}
 void nativegame_save(void) {pthread_mutex_lock(&lock);request=1;pthread_mutex_unlock(&lock);}
 void nativegame_load(void) {pthread_mutex_lock(&lock);request=2;pthread_mutex_unlock(&lock);}
 bool nativegame_present(uint16_t *pixels,uint32_t *seen) {
@@ -126,6 +127,12 @@ static void video(const void *p,unsigned w,unsigned h,size_t pitch) {
 			const unsigned char *src=(const unsigned char*)p+(size_t)ymap[y]*pitch;
 			uint16_t *dst=latest+(y+y0)*NATIVEGAME_W+x0;
 			if(y&&ymap[y]==ymap[y-1]){memcpy(dst,dst-NATIVEGAME_W,dw*2u);continue;}
+			// GBA 240x160 and other exact 2x RGB565 sources: duplicate a
+			// pixel with a single 32-bit store, no map lookup or conversion.
+			if(format==2&&dw==2*w){
+				for(unsigned x=0;x<w;++x){uint16_t q;memcpy(&q,src+x*2,2);uint32_t pair=(uint32_t)q|((uint32_t)q<<16);memcpy(dst+x*2,&pair,4);}
+				continue;
+			}
 			for(unsigned x=0;x<dw;++x) {
 				unsigned i=xmap[x];
 				if(format==1){uint32_t q;memcpy(&q,src+i*4,4);dst[x]=(uint16_t)(((q>>8)&0xf800)|((q>>5)&0x7e0)|((q>>3)&31));}
@@ -302,6 +309,7 @@ static void *run(void *arg) {
 	sram(&c,saves,save_name,true);state(&c,saves,state_name,true);
 	pthread_mutex_lock(&lock);native_fps=av.timing.fps;fps_limit=stored_fps;pthread_mutex_unlock(&lock);
 	int audio_rate=0;
+	unsigned perf_frames=0;struct timespec perf_start={0};
 	for(;;){
 		pthread_mutex_lock(&lock);
 		bool stop=stop_requested,on_hold=paused,dirty=fps_dirty;
@@ -317,7 +325,7 @@ static void *run(void *arg) {
 		if(req){state(&c,saves,state_name,req==2);if(req==2){sound_used=0;game_resampler_reset(&audio_resampler,(unsigned)audio_rate,GAME_PCM_RATE);}}
 		if(on_hold){
 			if(have_audio){audio_external_end();have_audio=false;}
-			sound_used=0;audio_rate=0;
+			sound_used=0;audio_rate=0;perf_frames=0;
 			struct timespec delay={0,20000000};nanosleep(&delay,NULL);continue;
 		}
 		int rate=0;
@@ -331,7 +339,8 @@ static void *run(void *arg) {
 		}
 		int64_t period=game_period_ns(av.timing.fps,limit);
 		struct timespec a,b;clock_gettime(CLOCK_MONOTONIC,&a);
-		c.retro_run();flush_audio();
+		if(!perf_frames)perf_start=a;
+		c.retro_run();flush_audio();++perf_frames;
 		// Start-to-start cap, including PCM blocking; never catch up by
 		// running bursts after a slow frame. Retry interrupted sleeps.
 		for(;;){
@@ -342,6 +351,9 @@ static void *run(void *arg) {
 			struct timespec delay={(time_t)(ns/1000000000),(long)(ns%1000000000)};
 			if(nanosleep(&delay,NULL)==0||errno!=EINTR)break;
 		}
+		clock_gettime(CLOCK_MONOTONIC,&b);
+		int64_t span=(int64_t)(b.tv_sec-perf_start.tv_sec)*1000000000+b.tv_nsec-perf_start.tv_nsec;
+		if(span>=1000000000){pthread_mutex_lock(&lock);measured_fps=perf_frames*1000000000.0/span;pthread_mutex_unlock(&lock);perf_frames=0;}
 	}
 	state(&c,saves,state_name,false);sram(&c,saves,save_name,false);
 done:
@@ -371,7 +383,7 @@ bool nativegame_start(const char *id,const char *rom) {
 	if(!latest){close(s->card);free(s);pthread_mutex_unlock(&lock);return false;}
 	snprintf(s->id,sizeof(s->id),"%s",id);if(rom)snprintf(s->rom,sizeof(s->rom),"%s",rom);
 	busy=true;failed=stop_requested=false;request=0;keys=0;serial=0;
-	paused=fps_dirty=fps_save_error=false;fps_limit=0;native_fps=0;
+	paused=fps_dirty=fps_save_error=false;fps_limit=0;native_fps=measured_fps=0;
 	pthread_mutex_unlock(&lock);
 	audio_stop();
 	pthread_t thread;

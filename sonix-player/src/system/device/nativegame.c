@@ -58,6 +58,7 @@ static unsigned format;
 static bool no_game,have_audio;
 static int16_t sound[2048*2];
 static size_t sound_used;
+static game_resampler_t audio_resampler;
 static char core_dir[1100],save_dir[1100];
 typedef struct {char id[SD_GAME_ID_MAX],rom[256]; int card;} session_t;
 static bool stopping(void) { pthread_mutex_lock(&lock);bool s=stop_requested;pthread_mutex_unlock(&lock);return s; }
@@ -136,13 +137,21 @@ static void video(const void *p,unsigned w,unsigned h,size_t pitch) {
 	pthread_mutex_unlock(&lock);
 }
 static void flush_audio(void) {if(have_audio && sound_used)audio_external_write(sound,(int)sound_used);sound_used=0;}
+static void emit_pcm(int16_t l,int16_t r) {
+	sound[2*sound_used]=l;sound[2*sound_used+1]=r;
+	if(++sound_used==2048)flush_audio();
+}
+static void sample(int16_t l,int16_t r) {
+	if(have_audio)game_resampler_push(&audio_resampler,l,r,emit_pcm);
+}
 static size_t batch(const int16_t *p,size_t n) {
-	if(!have_audio || !p)return n;
-	flush_audio();
-	for(size_t i=0;i<n && !stopping();) {size_t q=n-i;if(q>2048)q=2048;audio_external_write(p+2*i,(int)q);i+=q;}
+	if(!have_audio||!p)return n;
+	for(size_t i=0;i<n;++i){
+		if((i&2047u)==0&&stopping())break;
+		game_resampler_push(&audio_resampler,p[2*i],p[2*i+1],emit_pcm);
+	}
 	return n;
 }
-static void sample(int16_t l,int16_t r) {if(!have_audio)return;sound[2*sound_used]=l;sound[2*sound_used+1]=r;if(++sound_used==2048)flush_audio();}
 static void input_poll(void){}
 static int16_t input(unsigned port,unsigned device,unsigned index,unsigned id) {
 	(void)index;if(port||device!=1||id>=16)return 0;
@@ -305,10 +314,10 @@ static void *run(void *arg) {
 			pthread_mutex_lock(&lock);fps_save_error=!ok;pthread_mutex_unlock(&lock);
 		}
 		if(stop)break;
-		if(req)state(&c,saves,state_name,req==2);
+		if(req){state(&c,saves,state_name,req==2);if(req==2){sound_used=0;game_resampler_reset(&audio_resampler,(unsigned)audio_rate,GAME_PCM_RATE);}}
 		if(on_hold){
 			if(have_audio){audio_external_end();have_audio=false;}
-			audio_rate=0;
+			sound_used=0;audio_rate=0;
 			struct timespec delay={0,20000000};nanosleep(&delay,NULL);continue;
 		}
 		int rate=0;
@@ -317,7 +326,8 @@ static void *run(void *arg) {
 		if(rate!=audio_rate){
 			if(have_audio)audio_external_end();
 			have_audio=false;audio_rate=rate;
-			if(rate>=8000&&rate<=96000)have_audio=audio_external_begin_latency(rate,2,16,64);
+			sound_used=0;game_resampler_reset(&audio_resampler,(unsigned)rate,GAME_PCM_RATE);
+			if(rate>0&&rate<=96000)have_audio=audio_external_begin_latency(GAME_PCM_RATE,2,16,64);
 		}
 		int64_t period=game_period_ns(av.timing.fps,limit);
 		struct timespec a,b;clock_gettime(CLOCK_MONOTONIC,&a);

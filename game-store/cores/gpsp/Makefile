@@ -4,6 +4,7 @@ CC ?= cc
 CXX ?= c++
 OUT ?= core.so
 HOST_CC ?= cc
+CORE_VERSION ?= v1.0.0
 CFLAGS ?= -O2
 # Do not propagate command-line CFLAGS via MAKEFLAGS: upstream must append
 # its required feature macros, RGB565 support and PIC flags. Pass target
@@ -20,5 +21,10 @@ check:
 	rm -f smoke self-test.gba
 	$(MAKE) -C "$(UPSTREAM)" clean platform=unix HAVE_DYNAREC=0 CPU_ARCH=
 core:
+ifeq ($(CORE_VERSION),v1.1.0)
+	python3 r1_dynarec.py "$(UPSTREAM)"
+	$(MAKE) -C "$(UPSTREAM)" -j2 platform=unix HAVE_DYNAREC=1 CPU_ARCH=mips MMAP_JIT_CACHE=1 CC="$(CC)" CXX="$(CXX)" CODE_DEFINES="$(CFLAGS) -DROM_BUFFER_SIZE=4 -DSMALL_TRANSLATION_CACHE -DMIPS_HAS_R2_INSTS -DPIC" OPTIMIZE="-O2 -DNDEBUG"
+else
 	$(MAKE) -C "$(UPSTREAM)" -j2 platform=unix HAVE_DYNAREC=0 CPU_ARCH= CC="$(CC)" CXX="$(CXX)" CODE_DEFINES="$(CFLAGS) -DROM_BUFFER_SIZE=4" OPTIMIZE="-O2 -DNDEBUG"
+endif
 	cp "$(UPSTREAM)/gpsp_libretro.so" "$(OUT)"

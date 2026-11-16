@@ -50,7 +50,7 @@ static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static bool busy,stop_requested,failed;
 static bool paused,fps_dirty,fps_save_error;
 static game_options_t options;
-static bool fast_forward,gpsp_core,session_interpreter,skip_video;
+static bool fast_forward,gpsp_core,session_interpreter,skip_video,session_recovered;
 static double native_fps,measured_fps,measured_video_fps;
 static unsigned available_ram_kib,rendered_frames,request_slot;
 static int state_result;
@@ -94,6 +94,7 @@ bool nativegame_fast_forward(void) {pthread_mutex_lock(&lock);bool on=fast_forwa
 void nativegame_diagnostics(double *fps,double *video_fps,unsigned *ram_kib) {
 	pthread_mutex_lock(&lock);if(fps)*fps=measured_fps;if(video_fps)*video_fps=measured_video_fps;if(ram_kib)*ram_kib=available_ram_kib;pthread_mutex_unlock(&lock);
 }
+bool nativegame_recovered(void){pthread_mutex_lock(&lock);bool recovered=session_recovered;pthread_mutex_unlock(&lock);return recovered;}
 int nativegame_state_result(void){pthread_mutex_lock(&lock);int result=state_result;pthread_mutex_unlock(&lock);return result;}
 static void queue_state(int action){pthread_mutex_lock(&lock);if(busy&&!stop_requested&&native_fps>0){request=action;request_slot=options.slot;state_result=0;}pthread_mutex_unlock(&lock);}
 void nativegame_save(void){queue_state(1);}
@@ -295,8 +296,8 @@ static void sram(core_t *c,int saves,const char *name,bool load) {
 	else file_write(saves,name,p,n);
 }
 static void *run(void *arg) {
-	session_t *s=arg;core_t c={0};void *lib=NULL,*rom_data=NULL;bool init=false,loaded=false;int saves=-1;
-	char card[64],core[1100],rom[1100],state_name[80],save_name[80],fps_name[80],options_name[80],digest[65],state_digest[65],generation[SDPACKAGES_VERSION],version[SDPACKAGES_VERSION];
+	session_t *s=arg;core_t c={0};void *lib=NULL,*rom_data=NULL;bool init=false,loaded=false,marked=false,recovered=false;int saves=-1;
+	char card[64],core[1100],rom[1100],state_name[80],save_name[80],fps_name[80],options_name[80],running_name[80],digest[65],state_digest[65],generation[SDPACKAGES_VERSION],version[SDPACKAGES_VERSION];
 	snprintf(card,sizeof(card),"/proc/self/fd/%d/.",s->card);
 	if(!sdpackages_game_core(card,s->id,core,sizeof(core))||!sdpackages_game_generation(card,s->id,generation,version))goto done;
 	memcpy(core_dir,core,strlen(core)+1);*strrchr(core_dir,'/')=0;
@@ -311,7 +312,16 @@ static void *run(void *arg) {
 	game_options_t stored=game_options_default();stored.fps=stored_fps;
 	game_options_t disk;
 	if(file_read(saves,options_name,&disk,sizeof(disk))&&game_options_valid(disk))stored=disk;
-	gpsp_core=!strcmp(s->id,"gpsp");session_interpreter=stored.jit==GAME_JIT_INTERPRETER;skip_video=false;rendered_frames=0;
+		snprintf(running_name,sizeof(running_name),"%s.running",digest);
+	uint8_t marker=0;
+	recovered=file_read(saves,running_name,&marker,1)&&marker==1;
+	// Write before dlopen/init. A clean close removes it. A power loss is
+	// indistinguishable from a crash; never change the user's stored options.
+	marker=1;
+	marked=recovered||file_write(saves,running_name,&marker,1);
+	if(marked)(void)fsync(saves);
+	gpsp_core=!strcmp(s->id,"gpsp");session_interpreter=stored.jit==GAME_JIT_INTERPRETER||recovered;skip_video=false;rendered_frames=0;
+	pthread_mutex_lock(&lock);session_recovered=recovered;pthread_mutex_unlock(&lock);
 	// Save states are engine-version specific; battery saves survive updates.
 	sha256_init(&hash);sha256_update(&hash,s->rom,strlen(s->rom)+1);sha256_update(&hash,version,strlen(version));sha256_final_hex(&hash,digest);
 	snprintf(state_name,sizeof(state_name),"%s.state",digest);
@@ -338,7 +348,7 @@ static void *run(void *arg) {
 	if(!c.retro_load_game(s->rom[0]?&game:NULL))goto done;
 	loaded=true;av_info_t av={0};c.retro_get_system_av_info(&av);
 	if(!(av.timing.fps>=10.0&&av.timing.fps<=120.0)||av.geometry.max_width>1024||av.geometry.max_height>1024)goto done;
-	sram(&c,saves,save_name,true);state(&c,saves,state_name,true);
+	sram(&c,saves,save_name,true);if(!recovered)state(&c,saves,state_name,true);
 	pthread_mutex_lock(&lock);native_fps=av.timing.fps;options=stored;pthread_mutex_unlock(&lock);
 	int audio_rate=0;unsigned audio_buffer=0;
 	unsigned perf_frames=0,perf_rendered=0;struct timespec perf_start={0};
@@ -404,13 +414,32 @@ static void *run(void *arg) {
 		int64_t span=(int64_t)(b.tv_sec-perf_start.tv_sec)*1000000000+b.tv_nsec-perf_start.tv_nsec;
 		if(span>=1000000000){unsigned ram=ram_available();pthread_mutex_lock(&lock);measured_fps=perf_frames*1000000000.0/span;measured_video_fps=(rendered_frames-perf_rendered)*1000000000.0/span;available_ram_kib=ram;pthread_mutex_unlock(&lock);perf_frames=0;}
 	}
-	state(&c,saves,state_name,false);sram(&c,saves,save_name,false);
+	// After recovery preserve the previous automatic save for manual recovery;
+	// manual slots and battery SRAM remain available during this session.
+	if(!recovered)state(&c,saves,state_name,false);
+	sram(&c,saves,save_name,false);
 done:
 	if(have_audio)audio_external_end();
 	have_audio=false;
 	if(loaded)c.retro_unload_game();
 	if(init)c.retro_deinit();
 	if(lib)dlclose(lib);
+	if(marked&&saves>=0){
+		// Keep a stale marker if recovery itself failed. If recovery succeeded,
+		// quarantine the old auto-state once rather than retry it on next start.
+		bool clear=!recovered||loaded;
+		if(recovered&&loaded){
+			char backup[80];snprintf(backup,sizeof(backup),"%s.recovery",state_digest);
+			struct stat st;
+			if(fstatat(saves,state_name,&st,AT_SYMLINK_NOFOLLOW)==0){
+				// Refuse to overwrite an earlier quarantined state; preserve both.
+				struct stat prior;
+				if(fstatat(saves,backup,&prior,AT_SYMLINK_NOFOLLOW)==0)clear=false;
+				else if(errno!=ENOENT||renameat(saves,state_name,saves,backup))clear=false;
+			}else if(errno!=ENOENT)clear=false;
+		}
+		if(clear){(void)unlinkat(saves,running_name,0);(void)fsync(saves);}
+	}
 	free(rom_data);if(saves>=0)close(saves);close(s->card);free(s);
 	pthread_mutex_lock(&lock);failed=!stop_requested;free(latest);latest=NULL;busy=false;pthread_mutex_unlock(&lock);
 	return NULL;
@@ -432,7 +461,7 @@ bool nativegame_start(const char *id,const char *rom) {
 	if(!latest){close(s->card);free(s);pthread_mutex_unlock(&lock);return false;}
 	snprintf(s->id,sizeof(s->id),"%s",id);if(rom)snprintf(s->rom,sizeof(s->rom),"%s",rom);
 	busy=true;failed=stop_requested=false;request=0;keys=0;serial=0;
-	paused=fps_dirty=fps_save_error=fast_forward=false;options=game_options_default();native_fps=measured_fps=measured_video_fps=0;available_ram_kib=0;request_slot=0;state_result=0;
+	paused=fps_dirty=fps_save_error=fast_forward=session_recovered=false;options=game_options_default();native_fps=measured_fps=measured_video_fps=0;available_ram_kib=0;request_slot=0;state_result=0;
 	pthread_mutex_unlock(&lock);
 	audio_stop();
 	pthread_t thread;

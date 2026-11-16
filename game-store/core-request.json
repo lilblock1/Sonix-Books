@@ -6,10 +6,11 @@
   "hardware_verified": false,
   "firmware_test": "v0.3.0.76-test",
   "upstream": "26bb785c9deddb66a17717b21bb4e328f03ade32",
-  "build_attempt": 2,
+  "build_attempt": 3,
   "optimizations": [
     "visible-area RGB565 conversion",
     "scalar pixel lookup unrolling",
     "repeatable isolated host video/audio regression gate"
-  ]
+  ],
+  "test_fix": "Repair generated test ROM JMP target and initialize PPU/APU; retain repeated baseline and optimized A/V hash comparison"
 }

@@ -6,11 +6,10 @@
   "hardware_verified": false,
   "firmware_test": "v0.3.0.76-test",
   "upstream": "26bb785c9deddb66a17717b21bb4e328f03ade32",
-  "build_attempt": 1,
+  "build_attempt": 2,
   "optimizations": [
     "visible-area RGB565 conversion",
-    "scalar loop unrolling",
-    "performance compiler optimization",
-    "bit-identical host video/audio regression gate"
+    "scalar pixel lookup unrolling",
+    "repeatable isolated host video/audio regression gate"
   ]
 }

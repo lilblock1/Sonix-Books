@@ -17,4 +17,5 @@ void nativegame_load(void);
 void nativegame_pause(bool paused);
 bool nativegame_set_fps(unsigned fps);
 void nativegame_get_fps(unsigned *limit, double *native, bool *save_error);
+double nativegame_measured_fps(void);
 #endif

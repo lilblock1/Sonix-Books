@@ -283,6 +283,20 @@ static bool state(core_t *c,int saves,const char *name,bool load) {
 	bool ok=load?(file_read(saves,name,buf,n)&&c->retro_unserialize(buf,n)):(c->retro_serialize(buf,n)&&file_write(saves,name,buf,n));
 	free(buf);return ok;
 }
+// Preserve a suspect automatic state before writing a fresh one. Keep up to
+// nine independent recovery copies, never overwrite a prior backup.
+static bool quarantine_state(int saves,const char *name,const char *digest){
+	struct stat st;
+	if(fstatat(saves,name,&st,AT_SYMLINK_NOFOLLOW))return errno==ENOENT;
+	if(!S_ISREG(st.st_mode)||st.st_size<=0||(uint64_t)st.st_size>STATE_MAX)return false;
+	for(unsigned i=1;i<=9;++i){
+		char backup[80];snprintf(backup,sizeof(backup),"%s.recover%c",digest,(int)('0'+i));
+		if(fstatat(saves,backup,&st,AT_SYMLINK_NOFOLLOW)==0)continue;
+		if(errno!=ENOENT)return false;
+		return renameat(saves,name,saves,backup)==0;
+	}
+	return false;
+}
 static unsigned ram_available(void){
 	FILE *f=fopen("/proc/meminfo","r");if(!f)return 0;
 	char line[128];unsigned n=0;
@@ -296,7 +310,7 @@ static void sram(core_t *c,int saves,const char *name,bool load) {
 	else file_write(saves,name,p,n);
 }
 static void *run(void *arg) {
-	session_t *s=arg;core_t c={0};void *lib=NULL,*rom_data=NULL;bool init=false,loaded=false,marked=false,recovered=false;int saves=-1;
+	session_t *s=arg;core_t c={0};void *lib=NULL,*rom_data=NULL;bool init=false,loaded=false,marked=false,recovered=false,recovery_saved=false;int saves=-1;
 	char card[64],core[1100],rom[1100],state_name[80],save_name[80],fps_name[80],options_name[80],running_name[80],digest[65],state_digest[65],generation[SDPACKAGES_VERSION],version[SDPACKAGES_VERSION];
 	snprintf(card,sizeof(card),"/proc/self/fd/%d/.",s->card);
 	if(!sdpackages_game_core(card,s->id,core,sizeof(core))||!sdpackages_game_generation(card,s->id,generation,version))goto done;
@@ -414,9 +428,10 @@ static void *run(void *arg) {
 		int64_t span=(int64_t)(b.tv_sec-perf_start.tv_sec)*1000000000+b.tv_nsec-perf_start.tv_nsec;
 		if(span>=1000000000){unsigned ram=ram_available();pthread_mutex_lock(&lock);measured_fps=perf_frames*1000000000.0/span;measured_video_fps=(rendered_frames-perf_rendered)*1000000000.0/span;available_ram_kib=ram;pthread_mutex_unlock(&lock);perf_frames=0;}
 	}
-	// After recovery preserve the previous automatic save for manual recovery;
-	// manual slots and battery SRAM remain available during this session.
+	// Preserve the prior auto-state before writing new progress after recovery.
 	if(!recovered)state(&c,saves,state_name,false);
+	else if(quarantine_state(saves,state_name,state_digest))
+		recovery_saved=state(&c,saves,state_name,false);
 	sram(&c,saves,save_name,false);
 done:
 	if(have_audio)audio_external_end();
@@ -424,21 +439,8 @@ done:
 	if(loaded)c.retro_unload_game();
 	if(init)c.retro_deinit();
 	if(lib)dlclose(lib);
-	if(marked&&saves>=0){
-		// Keep a stale marker if recovery itself failed. If recovery succeeded,
-		// quarantine the old auto-state once rather than retry it on next start.
-		bool clear=!recovered||loaded;
-		if(recovered&&loaded){
-			char backup[80];snprintf(backup,sizeof(backup),"%s.recovery",state_digest);
-			struct stat st;
-			if(fstatat(saves,state_name,&st,AT_SYMLINK_NOFOLLOW)==0){
-				// Refuse to overwrite an earlier quarantined state; preserve both.
-				struct stat prior;
-				if(fstatat(saves,backup,&prior,AT_SYMLINK_NOFOLLOW)==0)clear=false;
-				else if(errno!=ENOENT||renameat(saves,state_name,saves,backup))clear=false;
-			}else if(errno!=ENOENT)clear=false;
-		}
-		if(clear){(void)unlinkat(saves,running_name,0);(void)fsync(saves);}
+	if(marked&&saves>=0&&(!recovered||recovery_saved)){
+		(void)unlinkat(saves,running_name,0);(void)fsync(saves);
 	}
 	free(rom_data);if(saves>=0)close(saves);close(s->card);free(s);
 	pthread_mutex_lock(&lock);failed=!stop_requested;free(latest);latest=NULL;busy=false;pthread_mutex_unlock(&lock);

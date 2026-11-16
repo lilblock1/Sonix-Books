@@ -357,10 +357,10 @@ static void *run(void *arg) {
 		if(stop)break;
 		if(req){
 			char slot_name[80];
-			if(slot)snprintf(slot_name,sizeof(slot_name),"%s.slot%u.state",state_digest,slot);
-			else snprintf(slot_name,sizeof(slot_name),"%s",state_name);
+			// Manual slots are separate from the legacy automatic resume file.
+			snprintf(slot_name,sizeof(slot_name),"%s.slot%c.state",state_digest,(int)('1'+(slot%4)));
 			bool ok=state(&c,saves,slot_name,req==2);
-			pthread_mutex_lock(&lock);state_result=ok?req:-1;pthread_mutex_unlock(&lock);
+			pthread_mutex_lock(&lock);if(!request)state_result=ok?req:-1;pthread_mutex_unlock(&lock);
 			if(req==2){sound_used=0;game_resampler_reset(&audio_resampler,(unsigned)audio_rate,GAME_PCM_RATE);}
 		}
 		if(on_hold){

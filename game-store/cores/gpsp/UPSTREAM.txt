@@ -1,0 +1,3 @@
+https://github.com/libretro/gpsp
+5819380c2ffb0900219d700a382ee68c464ebb99
+Original upstream source and COPYING retained. Includes upstream GPL-2 open replacement BIOS; no official Nintendo BIOS or commercial ROMs. Initial R1 build uses interpreter and 4 MiB ROM cache.

@@ -1,0 +1,3 @@
+https://github.com/libretro/QuickNES_Core
+26bb785c9deddb66a17717b21bb4e328f03ade32
+Pinned upstream source; original notices and GPL-2.0 license retained. No commercial game ROMs included.

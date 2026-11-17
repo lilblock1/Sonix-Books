@@ -1,0 +1,109 @@
+name: Mirror PocketOS R1 experimental Wi-Fi pre-release
+on:
+  push:
+    branches: [pocketos-r1-wifi-prerelease-v0.3.0.100-test]
+    paths:
+      - '.github/workflows/pocketos-r1-wifi-prerelease.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: pocketos-r1-wifi-mirror-v0-3-0-100
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'lilblock1/Sonix-Books' && github.ref == 'refs/heads/pocketos-r1-wifi-prerelease-v0.3.0.100-test'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v0.3.0.100-test
+      SOURCE_REPO: lilblock1/PocketOS
+      UPT_SHA: 655d884fb2ff6657a7482941f9e0a5ac3071eeb9e45aaf8c798ac4d62e27cfc7
+      SD_SHA: c3a5dd72788c299d1af5d8e12e19e7530c4e2babade59bfec3a4aaf42cb26875
+      UPT_SIZE: '47929344'
+    steps:
+      - name: Verify original source release and image metadata
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing test release."
+            exit 1
+          fi
+          gh api "repos/$SOURCE_REPO/releases/tags/$TAG" > upstream.json
+          jq -e --arg tag "$TAG" --arg upt "sha256:$UPT_SHA" --arg sd "sha256:$SD_SHA" --argjson sz "$UPT_SIZE" '
+            .tag_name==$tag and .prerelease==true and .draft==false and
+            ([.assets[]|select(.name=="r1.upt" and .state=="uploaded" and .digest==$upt and .size==$sz)]|length)==1 and
+            ([.assets[]|select(.name=="PocketOS-R1-SD-Boot-Test.zip" and .state=="uploaded" and .digest==$sd)]|length)==1
+          ' upstream.json
+      - name: Download and hash-verify exact PocketOS R1 candidate
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' --proto-redir '=https' \
+            --connect-timeout 15 --max-time 240 \
+            "https://github.com/$SOURCE_REPO/releases/download/$TAG/r1.upt" -o r1.upt
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' --proto-redir '=https' \
+            --connect-timeout 15 --max-time 120 \
+            "https://github.com/$SOURCE_REPO/releases/download/$TAG/PocketOS-R1-SD-Boot-Test.zip" \
+            -o PocketOS-R1-SD-Boot-Test.zip
+          printf '%s  r1.upt\n%s  PocketOS-R1-SD-Boot-Test.zip\n' "$UPT_SHA" "$SD_SHA" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          test "$(stat -c%s r1.upt)" = "$UPT_SIZE"
+          unzip -tq PocketOS-R1-SD-Boot-Test.zip
+          unzip -Z1 PocketOS-R1-SD-Boot-Test.zip | grep -Fxq 'PocketOS/bin/pocketos-shell'
+          unzip -Z1 PocketOS-R1-SD-Boot-Test.zip | grep -Fxq 'PocketOS/boot-guard.sh'
+          unzip -Z1 PocketOS-R1-SD-Boot-Test.zip | grep -Fxq 'PocketOS-try-new-ui'
+      - name: Publish independent PocketOS Wi-Fi test-channel pre-release
+        run: |
+          set -euo pipefail
+          cat > RELEASE-NOTES.md <<'EOF'
+          # PocketOS R1 experimental Wi-Fi update
+
+          This pre-release is a mirror of the PocketOS R1 v0.3.0.100-test
+          candidate, placed here because existing Sonix Books R1 installations
+          discover Wi-Fi test-channel firmware in lilblock1/Sonix-Books.
+
+          WARNING: This firmware has NOT been tested on a physical HiBy R1.
+          It may fail to boot or require manual recovery. The image contains
+          the unchanged pinned R1 kernel and vendor hardware initialization,
+          but modifies the root filesystem launch wrapper. Its squashfs is
+          4096 bytes larger than the reference. Physical flash partition
+          capacity, recovery availability and recovery updater write targets
+          have NOT been verified. No bootloader or recovery image is included.
+
+          The PocketOS interface is NOT in the firmware image. Download the
+          PocketOS-R1-SD-Boot-Test.zip separately and extract its contents
+          onto the microSD root. Only when PocketOS-try-new-ui is present,
+          together with the hash-pinned PocketOS shell and boot guard, will
+          the device attempt to start the PocketOS interface. Otherwise the
+          original Sonix player starts. Removing the marker attempts to
+          restore the original player on the next boot.
+
+          Existing Sonix Books Wi-Fi updater: Settings > System >
+          Update firmware > Via internet > Test. The installed firmware
+          must be older than 0.3.0.100 and configured for Sonix Books.
+          Battery must be at least 50 percent.
+
+          Publishing this release does not validate flashing or recovery.
+          Neither the existing Sonix releases nor PocketOS test-latest
+          are overwritten or altered.
+
+          Source: https://github.com/lilblock1/PocketOS/releases/tag/v0.3.0.100-test
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Refusing to overwrite occupied tag."
+            exit 1
+          fi
+          gh release create "$TAG" r1.upt PocketOS-R1-SD-Boot-Test.zip SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "PocketOS R1 v0.3.0.100-test - experimental Wi-Fi test" \
+            --notes-file RELEASE-NOTES.md
+      - name: Verify release is public and has exact trusted assets
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > mirrored.json
+          jq -e --arg tag "$TAG" --arg upt "sha256:$UPT_SHA" --arg sd "sha256:$SD_SHA" '
+            .tag_name==$tag and .draft==false and .prerelease==true and
+            ([.assets[]|select(.name=="r1.upt" and .digest==$upt)]|length)==1 and
+            ([.assets[]|select(.name=="PocketOS-R1-SD-Boot-Test.zip" and .digest==$sd)]|length)==1
+          ' mirrored.json
